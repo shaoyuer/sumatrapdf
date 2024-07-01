@@ -16,6 +16,7 @@
 #include "Settings.h"
 #include "SumatraConfig.h"
 #include "Flags.h"
+#include "Annotation.h"
 #include "SumatraPDF.h"
 #include "Installer.h"
 #include "AppTools.h"
@@ -126,7 +127,7 @@ static DWORD WINAPI UninstallerThread(void*) {
     return 0;
 }
 
-static void OnButtonUninstall() {
+static void OnButtonUninstall(void*) {
     if (!CheckInstallUninstallPossible()) {
         return;
     }
@@ -139,7 +140,7 @@ static void OnButtonUninstall() {
     hThread = CreateThread(nullptr, 0, UninstallerThread, nullptr, 0, nullptr);
 }
 
-static void OnButtonExit() {
+static void OnButtonExit(void*) {
     SendMessageW(gHwndFrame, WM_CLOSE, 0, 0);
 }
 
@@ -147,7 +148,7 @@ void OnUninstallationFinished() {
     delete gButtonUninstaller;
     gButtonUninstaller = nullptr;
     gButtonExit = CreateDefaultButton(gHwndFrame, _TRA("Close"));
-    gButtonExit->onClicked = OnButtonExit;
+    gButtonExit->onClicked = mkFunc0<void>(OnButtonExit, nullptr);
     SetMsg(_TRA("SumatraPDF has been uninstalled."), gMsgError ? COLOR_MSG_FAILED : COLOR_MSG_OK);
     gMsgError = gFirstError;
     HwndInvalidate(gHwndFrame);
@@ -158,7 +159,7 @@ void OnUninstallationFinished() {
 static bool UninstallerOnWmCommand(WPARAM wp) {
     switch (LOWORD(wp)) {
         case IDCANCEL:
-            OnButtonExit();
+            OnButtonExit(nullptr);
             break;
 
         default:
@@ -184,7 +185,7 @@ static void CreateUninstallerWindow() {
     HwndResizeClientSize(gHwndFrame, dx, dy);
 
     gButtonUninstaller = CreateDefaultButton(gHwndFrame, _TRA("Uninstall SumatraPDF"));
-    gButtonUninstaller->onClicked = OnButtonUninstall;
+    gButtonUninstaller->onClicked = mkFunc0<void>(OnButtonUninstall, nullptr);
 }
 
 static void ShowUsage() {
@@ -263,7 +264,7 @@ static bool RegisterWinClass() {
     wcex.hIcon = LoadIconW(h, iconName);
 
     ATOM atom = RegisterClassExW(&wcex);
-    CrashIf(!atom);
+    ReportIf(!atom);
     return atom != 0;
 }
 
@@ -321,7 +322,7 @@ static int RunApp() {
 static char* GetUninstallerPathInTemp() {
     WCHAR tempDir[MAX_PATH + 14]{};
     DWORD res = ::GetTempPathW(dimof(tempDir), tempDir);
-    CrashAlwaysIf(res == 0 || res >= dimof(tempDir));
+    ReportIf(res == 0 || res >= dimof(tempDir));
     char* dirA = ToUtf8Temp(tempDir);
     return path::Join(dirA, "Sumatra-Uninstaller.exe");
 }
@@ -380,7 +381,7 @@ static void RelaunchMaybeElevatedFromTempDirectory(Flags* cli) {
 static char* GetSelfDeleteBatchPathInTemp() {
     WCHAR tempDir[MAX_PATH + 14]{};
     DWORD res = ::GetTempPathW(dimof(tempDir), tempDir);
-    CrashAlwaysIf(res == 0 || res >= dimof(tempDir));
+    ReportIf(res == 0 || res >= dimof(tempDir));
     char* tempDirA = ToUtf8Temp(tempDir);
     return path::JoinTemp(tempDirA, "sumatra-self-del.bat");
 }

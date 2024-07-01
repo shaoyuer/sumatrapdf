@@ -322,7 +322,7 @@ static Rect CalcPropertiesLayout(PropertiesLayout* layoutData, HDC hdc) {
         lineCount++;
     }
 
-    CrashIf(!(lineCount > 0 && textDy > 0));
+    ReportIf(!(lineCount > 0 && textDy > 0));
     int totalDx = leftMaxDx + kLeftRightPaddingDx + rightMaxDx;
 
     int totalDy = 4;
@@ -365,20 +365,15 @@ static Rect CalcPropertiesLayout(PropertiesLayout* layoutData, HDC hdc) {
     return rect;
 }
 
-static void ShowExtendedProperties(HWND hwnd) {
-    PropertiesLayout* pl = FindPropertyWindowByHwnd(hwnd);
-    if (!pl) {
-        return;
-    }
-    MainWindow* win = FindMainWindowByHwnd(pl->hwndParent);
+static void ShowExtendedProperties(PropertiesLayout* pl) {
+    MainWindow* win = FindMainWindowByHwnd(pl ? pl->hwndParent : nullptr);
     if (win && !pl->HasProperty(_TRA("Fonts:"))) {
-        DestroyWindow(hwnd);
+        DestroyWindow(pl->hwnd);
         ShowProperties(win->hwndFrame, win->ctrl, true);
     }
 }
 
-static void CopyPropertiesToClipboard(HWND hwnd) {
-    PropertiesLayout* layoutData = FindPropertyWindowByHwnd(hwnd);
+static void CopyPropertiesToClipboard(PropertiesLayout* layoutData) {
     if (!layoutData) {
         return;
     }
@@ -403,13 +398,13 @@ static bool CreatePropertiesWindow(HWND hParent, PropertiesLayout* layoutData, b
         FillWndClassEx(wcex, kPropertiesWinClassName, WndProcProperties);
         WCHAR* iconName = MAKEINTRESOURCEW(GetAppIconID());
         wcex.hIcon = LoadIconW(h, iconName);
-        CrashIf(!wcex.hIcon);
+        ReportIf(!wcex.hIcon);
         ATOM atom = RegisterClassEx(&wcex);
-        CrashIf(!atom);
+        ReportIf(!atom);
         gDidRegister = true;
     }
 
-    CrashIf(layoutData->hwnd);
+    ReportIf(layoutData->hwnd);
     DWORD dwStyle = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
     auto clsName = kPropertiesWinClassName;
     auto title = ToWStrTemp(_TRA("Document Properties"));
@@ -436,7 +431,7 @@ static bool CreatePropertiesWindow(HWND hParent, PropertiesLayout* layoutData, b
 
         layoutData->btnCopyToClipboard = b;
         b->SetRtl(isRtl);
-        b->onClicked = [hwnd] { CopyPropertiesToClipboard(hwnd); };
+        b->onClicked = mkFunc0(CopyPropertiesToClipboard, layoutData);
     }
 
     if (!extended) {
@@ -449,7 +444,7 @@ static bool CreatePropertiesWindow(HWND hParent, PropertiesLayout* layoutData, b
 
         b->SetRtl(isRtl);
         layoutData->btnGetFonts = b;
-        b->onClicked = [hwnd] { ShowExtendedProperties(hwnd); };
+        b->onClicked = mkFunc0(ShowExtendedProperties, layoutData);
     }
 
     // get the dimensions required for the about box's content
@@ -487,7 +482,7 @@ static const char* propToName[] = {
 
 static void AddPropTranslated(PropertiesLayout* layoutData, const char* propName, const char* val) {
     const char* s = GetMatchingString(propToName, propName);
-    CrashIf(!s);
+    ReportIf(!s);
     const char* trans = trans::GetTranslation(s);
     layoutData->AddProperty(trans, val);
 }
@@ -513,7 +508,6 @@ static void AddPdfFileStructure(DocController* ctrl, PropertiesLayout* layoutDat
 
     const char* linearized = _TRA("No");
     if (parts.Contains("linearized")) {
-        props.Append(_TRA("Fast Web View"));
         linearized = _TRA("Yes");
     }
     layoutData->AddProperty(_TRA("Fast Web View"), linearized);
@@ -536,7 +530,7 @@ static void AddPdfFileStructure(DocController* ctrl, PropertiesLayout* layoutDat
 }
 
 static void GetProps(DocController* ctrl, PropertiesLayout* layoutData, bool extended) {
-    CrashIf(!ctrl);
+    ReportIf(!ctrl);
 
     const char* path = gPluginMode ? gPluginURL : ctrl->GetFilePath();
     layoutData->AddProperty(_TRA("File:"), path, true);
@@ -685,14 +679,15 @@ static void OnPaintProperties(HWND hwnd) {
 
 static void PropertiesOnCommand(HWND hwnd, WPARAM wp) {
     auto cmd = LOWORD(wp);
+    PropertiesLayout* pl = FindPropertyWindowByHwnd(hwnd);
     switch (cmd) {
         case CmdCopySelection:
-            CopyPropertiesToClipboard(hwnd);
+            CopyPropertiesToClipboard(pl);
             break;
 
         case CmdProperties:
             // make a repeated Ctrl+D display some extended properties
-            ShowExtendedProperties(hwnd);
+            ShowExtendedProperties(pl);
             break;
     }
 }
@@ -726,7 +721,7 @@ LRESULT CALLBACK WndProcProperties(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         case WM_DESTROY:
             pl = FindPropertyWindowByHwnd(hwnd);
-            CrashIf(!pl);
+            ReportIf(!pl);
             gPropertiesWindows.Remove(pl);
             delete pl;
             break;

@@ -259,6 +259,16 @@ static char* GetFoxitPathTemp() {
     if (path && file::Exists(path)) {
         return path;
     }
+    // Registry value for Foxit PDF Reader 12.1.3.15356 (The last version with Add Bookmark function without bugs in
+    // single-key accelerator)
+    keyName = R"(SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\FoxitPDFReader.exe)";
+    path = ReadRegStrTemp(HKEY_LOCAL_MACHINE, keyName, "Path");
+    if (path) {
+        path = path::JoinTemp(path, "FoxitPDFReader.exe");
+    }
+    if (path && file::Exists(path)) {
+        return path;
+    }
     return nullptr;
 }
 
@@ -280,7 +290,7 @@ static char* GetPDFXChangePathTemp() {
 }
 
 void DetectExternalViewers() {
-    CrashIf(gExternalViewersCount > 0); // only call once
+    ReportIf(gExternalViewersCount > 0); // only call once
 
     ExternalViewerInfo* info = nullptr;
     for (ExternalViewerInfo& i : gExternalViewers) {

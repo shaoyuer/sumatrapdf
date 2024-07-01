@@ -466,6 +466,7 @@ bool IsAbsolute(const char* path) {
     TempWStr ws = ToWStrTemp(path);
     return !PathIsRelativeW(ws);
 }
+} // namespace path
 
 // returns the path to either the %TEMP% directory or a
 // non-existing file inside whose name starts with filePrefix
@@ -489,27 +490,17 @@ TempStr GetTempFilePathTemp(const char* filePrefix) {
 // returns a path to the application module's directory
 // with either the given fileName or the module's name
 // (module is the EXE or DLL in which path::GetPathOfFileInAppDir resides)
-TempStr GetPathOfFileInAppDirTemp(const char* fileName) {
-    WCHAR modulePath[MAX_PATH]{};
-    GetModuleFileNameW(GetInstance(), modulePath, dimof(modulePath));
-    modulePath[dimof(modulePath) - 1] = '\0';
-    if (!fileName) {
-        return ToUtf8Temp(modulePath);
-    }
-    TempWStr moduleDir = path::GetDirTemp(modulePath);
-    TempWStr fileNameW = ToWStrTemp(fileName);
-    TempWStr path = path::JoinTemp(moduleDir, fileNameW);
-    path = path::Normalize(path);
-    TempStr res = ToUtf8Temp(path);
-    str::Free(path);
-    return res;
+TempStr GetPathInExeDirTemp(const char* fileName) {
+    TempStr dir = GetExeDirTemp();
+    TempStr path = path::JoinTemp(dir, fileName);
+    path = path::NormalizeTemp(path);
+    return path;
 }
-} // namespace path
 
 namespace file {
 
 FILE* OpenFILE(const char* path) {
-    CrashIf(!path);
+    ReportIf(!path);
     if (!path) {
         return nullptr;
     }
@@ -560,7 +551,7 @@ ByteSlice ReadFileWithAllocator(const char* filePath, Allocator* allocator) {
         // either way shouldn't happen because we're reading the exact size of file
         // I've seen this in crash reports so maybe the files are over-written
         // between the time I do fseek() and fread()
-        CrashIf(!(isEof || (err != 0)));
+        ReportIf(!(isEof || (err != 0)));
         goto Error;
     }
 
@@ -590,7 +581,7 @@ bool WriteFile(const char* path, const ByteSlice& d) {
 
     DWORD size = 0;
     BOOL ok = WriteFile(h, data, (DWORD)dataLen, &size, nullptr);
-    CrashIf(ok && (dataLen != (size_t)size));
+    ReportIf(ok && (dataLen != (size_t)size));
     return ok && dataLen == (size_t)size;
 }
 
@@ -618,7 +609,7 @@ bool Exists(const char* path) {
 
 // returns -1 on error (can't use INVALID_FILE_SIZE because it won't cast right)
 i64 GetSize(const char* path) {
-    CrashIf(!path);
+    ReportIf(!path);
     if (!path) {
         return -1;
     }

@@ -845,6 +845,7 @@
     <ClInclude Include="..\src\utils\WinUtil.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="..\src\CrashHandlerNoOp.cpp" />
     <ClCompile Include="..\src\DisplayMode.cpp" />
     <ClCompile Include="..\src\Flags.cpp" />
     <ClCompile Include="..\src\SumatraConfig.cpp" />
@@ -891,6 +892,7 @@
     <ClCompile Include="..\src\utils\tests\SquareTreeParser_ut.cpp" />
     <ClCompile Include="..\src\utils\tests\StrFormat_ut.cpp" />
     <ClCompile Include="..\src\utils\tests\StrUtil_ut.cpp" />
+    <ClCompile Include="..\src\utils\tests\StrVec_ut.cpp" />
     <ClCompile Include="..\src\utils\tests\TrivialHtmlParser_ut.cpp" />
     <ClCompile Include="..\src\utils\tests\Vec_ut.cpp" />
     <ClCompile Include="..\src\utils\tests\WinUtil_ut.cpp" />

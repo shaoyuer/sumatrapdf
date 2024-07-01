@@ -84,7 +84,6 @@
     V(AllUsers, "all-users")                     \
     V(AllUsers2, "allusers")                     \
     V(RunInstallNow, "run-install-now")          \
-    V(TestBrowser, "test-browser")               \
     V(Adobe, "a")                                \
     V(DDE, "dde")                                \
     V(SetColorRange, "set-color-range")
@@ -129,7 +128,7 @@ static void EnumeratePrinters() {
 
         DWORD bins = DeviceCapabilitiesW(nameW, portW, DC_BINS, nullptr, nullptr);
         DWORD binNames = DeviceCapabilitiesW(nameW, portW, DC_BINNAMES, nullptr, nullptr);
-        CrashIf(bins != binNames);
+        ReportIf(bins != binNames);
         if (0 == bins) {
             out.Append(" - no paper bins available\n");
         } else if (bins == (DWORD)-1) {
@@ -478,10 +477,6 @@ void ParseFlags(const WCHAR* cmdLine, Flags& i) {
         }
         if (arg == Arg::RunInstallNow) {
             i.runInstallNow = true;
-            continue;
-        }
-        if (arg == Arg::TestBrowser) {
-            i.testBrowser = true;
             continue;
         }
         if ((arg == Arg::AllUsers) || (arg == Arg::AllUsers2)) {

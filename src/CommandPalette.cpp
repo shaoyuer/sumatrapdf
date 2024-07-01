@@ -166,11 +166,9 @@ struct CommandPaletteWnd : Wnd {
 
     int currTabPos = 0;
 
-    void OnDestroy() override;
     bool PreTranslateMessage(MSG&) override;
     LRESULT WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) override;
 
-    void ScheduleDelete();
     void CollectStrings(MainWindow*);
     void FilterStringsForQuery(const char*, StrVec&);
 
@@ -210,6 +208,16 @@ static bool IsOpenExternalViewerCommand(i32 cmdId) {
 }
 
 static bool AllowCommand(const CommandPaletteBuildCtx& ctx, i32 cmdId) {
+    switch (cmdId) {
+        case CmdDebugCorruptMemory:
+        case CmdDebugCrashMe:
+        case CmdDebugDownloadSymbols:
+        case CmdDebugTestApp:
+        case CmdDebugShowNotif:
+        case CmdDebugStartStressTest:
+            return gIsDebugBuild;
+    }
+
     if (IsCmdInList(gBlacklistCommandsFromPalette)) {
         return false;
     }
@@ -321,16 +329,6 @@ static bool AllowCommand(const CommandPaletteBuildCtx& ctx, i32 cmdId) {
     if ((cmdId == CmdToggleScrollbars) && !gGlobalPrefs->fixedPageUI.hideScrollbars) {
         return false;
     }
-
-    switch (cmdId) {
-        case CmdDebugTestApp:
-        case CmdDebugShowNotif:
-        case CmdDebugStartStressTest:
-        case CmdDebugCorruptMemory:
-        case CmdDebugCrashMe: {
-            return gIsDebugBuild;
-        }
-    }
     return true;
 }
 
@@ -435,7 +433,7 @@ void CommandPaletteWnd::CollectStrings(MainWindow* mainWin) {
     int cmdId = (int)CmdFirst + 1;
     for (SeqStrings strs = gCommandDescriptions; strs; seqstrings::Next(strs, cmdId)) {
         if (AllowCommand(ctx, (i32)cmdId)) {
-            CrashIf(str::Leni(strs) == 0);
+            ReportIf(str::Leni(strs) == 0);
             tempStrings.Append(strs);
         }
     }
@@ -443,6 +441,27 @@ void CommandPaletteWnd::CollectStrings(MainWindow* mainWin) {
     for (char* s : tempStrings) {
         commands.Append(s);
     }
+}
+
+static CommandPaletteWnd* gCommandPaletteWnd = nullptr;
+static HWND gHwndToActivateOnClose = nullptr;
+
+void SafeDeleteCommandPaletteWnd() {
+    if (!gCommandPaletteWnd) {
+        return;
+    }
+
+    auto tmp = gCommandPaletteWnd;
+    gCommandPaletteWnd = nullptr;
+    delete tmp;
+    if (gHwndToActivateOnClose) {
+        SetActiveWindow(gHwndToActivateOnClose);
+        gHwndToActivateOnClose = nullptr;
+    }
+}
+
+static void ScheduleDelete() {
+    uitask::Post(TaskCommandPaletteDelete, &SafeDeleteCommandPaletteWnd);
 }
 
 LRESULT CommandPaletteWnd::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -584,27 +603,6 @@ void CommandPaletteWnd::QueryChanged() {
     }
 }
 
-static CommandPaletteWnd* gCommandPaletteWnd = nullptr;
-static HWND gHwndToActivateOnClose = nullptr;
-
-void SafeDeleteCommandPaletteWnd() {
-    if (!gCommandPaletteWnd) {
-        return;
-    }
-
-    auto tmp = gCommandPaletteWnd;
-    gCommandPaletteWnd = nullptr;
-    delete tmp;
-    if (gHwndToActivateOnClose) {
-        SetActiveWindow(gHwndToActivateOnClose);
-        gHwndToActivateOnClose = nullptr;
-    }
-}
-
-void CommandPaletteWnd::ScheduleDelete() {
-    uitask::Post(TaskCommandPaletteDelete, &SafeDeleteCommandPaletteWnd);
-}
-
 static WindowTab* FindOpenedFile(const char* s) {
     for (MainWindow* win : gWindows) {
         for (WindowTab* tab : win->Tabs()) {
@@ -689,7 +687,7 @@ void CommandPaletteWnd::ListDoubleClick() {
     ExecuteCurrentSelection();
 }
 
-void CommandPaletteWnd::OnDestroy() {
+void OnDestroy(WmDestroyEvent&) {
     ScheduleDelete();
 }
 
@@ -733,7 +731,7 @@ bool CommandPaletteWnd::Create(MainWindow* win, const char* prefix) {
         c->maxDx = 150;
         c->onTextChanged = std::bind(&CommandPaletteWnd::QueryChanged, this);
         HWND ok = c->Create(args);
-        CrashIf(!ok);
+        ReportIf(!ok);
         editQuery = c;
         vbox->AddChild(c);
     }
@@ -747,7 +745,7 @@ bool CommandPaletteWnd::Create(MainWindow* win, const char* prefix) {
         c->idealSizeLines = 32;
         c->SetInsetsPt(4, 0);
         auto wnd = c->Create(args);
-        CrashIf(!wnd);
+        ReportIf(!wnd);
         auto m = new ListBoxModelStrings();
         FilterStringsForQuery("", m->strings);
         c->SetModel(m);
@@ -763,7 +761,7 @@ bool CommandPaletteWnd::Create(MainWindow* win, const char* prefix) {
 
         auto c = new Static();
         auto wnd = c->Create(args);
-        CrashIf(!wnd);
+        ReportIf(!wnd);
         staticHelp = c;
         vbox->AddChild(c);
     }
@@ -794,13 +792,14 @@ bool CommandPaletteWnd::Create(MainWindow* win, const char* prefix) {
 }
 
 void RunCommandPallette(MainWindow* win, const char* prefix) {
-    CrashIf(gCommandPaletteWnd);
+    ReportIf(gCommandPaletteWnd);
 
     auto wnd = new CommandPaletteWnd();
+    wnd->onDestroy = OnDestroy;
     wnd->font = GetAppBiggerFont();
     wnd->win = win;
     bool ok = wnd->Create(win, prefix);
-    CrashIf(!ok);
+    ReportIf(!ok);
     gCommandPaletteWnd = wnd;
     gHwndToActivateOnClose = win->hwndFrame;
 }

@@ -71,78 +71,6 @@
 
 #include "utils/Log.h"
 
-// gFileExistenceChecker is initialized at startup and should
-// terminate and delete itself asynchronously while the UI is
-// being set up
-class FileExistenceChecker : public ThreadBase {
-    StrVec paths;
-
-    void GetFilePathsToCheck();
-    void HideMissingFiles();
-    void Terminate();
-
-  public:
-    FileExistenceChecker() {
-        GetFilePathsToCheck();
-    }
-    void Run() override;
-};
-
-static FileExistenceChecker* gFileExistenceChecker = nullptr;
-
-void FileExistenceChecker::GetFilePathsToCheck() {
-    FileState* fs;
-    for (size_t i = 0; i < 2 * kFileHistoryMaxRecent && (fs = gFileHistory.Get(i)) != nullptr; i++) {
-        if (!fs->isMissing) {
-            char* fp = fs->filePath;
-            paths.Append(fp);
-        }
-    }
-    // add missing paths from the list of most frequently opened documents
-    Vec<FileState*> frequencyList;
-    gFileHistory.GetFrequencyOrder(frequencyList);
-    size_t iMax = std::min<size_t>(2 * kFileHistoryMaxFrequent, frequencyList.size());
-    for (size_t i = 0; i < iMax; i++) {
-        fs = frequencyList.at(i);
-        char* fp = fs->filePath;
-        AppendIfNotExists(paths, fp);
-    }
-}
-
-void FileExistenceChecker::HideMissingFiles() {
-    for (const char* path : paths) {
-        gFileHistory.MarkFileInexistent(path, true);
-    }
-    // update the Frequently Read page in case it's been displayed already
-    if (paths.Size() > 0 && gWindows.size() > 0 && gWindows.at(0)->IsCurrentTabAbout()) {
-        gWindows.at(0)->RedrawAll(true);
-    }
-}
-
-void FileExistenceChecker::Terminate() {
-    gFileExistenceChecker = nullptr;
-    Join(); // just to be safe
-    delete this;
-}
-
-void FileExistenceChecker::Run() {
-    // filters all file paths on network drives, removable drives and
-    // all paths which still exist from the list (remaining paths will
-    // be marked as inexistent in gFileHistory)
-    for (int i = 0; i < paths.Size(); i++) {
-        const char* path = paths[i];
-        if (!path || !path::IsOnFixedDrive(path) || DocumentPathExists(path)) {
-            paths.RemoveAt(i--);
-        }
-    }
-
-    uitask::Post(TaskHideMissingFiles, [=] {
-        CrashIf(WasCancelRequested());
-        HideMissingFiles();
-        Terminate();
-    });
-}
-
 // return false if failed in a way that should abort the app
 static NO_INLINE bool MaybeMakePluginWindow(MainWindow* win, HWND hwndParent) {
     if (!hwndParent) {
@@ -150,7 +78,7 @@ static NO_INLINE bool MaybeMakePluginWindow(MainWindow* win, HWND hwndParent) {
     }
     logfa("MakePluginWindow: win: 0x%p, hwndParent: 0x%x (isWindow: %d), gPluginURL: %s\n", win, hwndParent,
           (int)IsWindow(hwndParent), gPluginURL ? gPluginURL : "<nulL>");
-    CrashIf(!gPluginMode);
+    ReportIf(!gPluginMode);
 
     if (!IsWindow(hwndParent)) {
         // we validated hwndParent for validity at startup but I'm seeing cases
@@ -183,27 +111,22 @@ static bool RegisterWinClass() {
     WCHAR* iconName = MAKEINTRESOURCEW(GetAppIconID());
     FillWndClassEx(wcex, FRAME_CLASS_NAME, WndProcSumatraFrame);
     wcex.hIcon = LoadIconW(h, iconName);
-    CrashIf(!wcex.hIcon);
     // For the extended translucent frame to be visible, we need black background.
     wcex.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
     atom = RegisterClassEx(&wcex);
-    CrashIf(!atom);
 
     FillWndClassEx(wcex, CANVAS_CLASS_NAME, WndProcCanvas);
     wcex.style |= CS_DBLCLKS;
     atom = RegisterClassEx(&wcex);
-    CrashIf(!atom);
 
     RegisterCaptionWndClass();
     return true;
 }
 
 static bool InstanceInit() {
-    gCursorDrag = LoadCursor(GetModuleHandle(nullptr), MAKEINTRESOURCE(IDC_CURSORDRAG));
-    CrashIf(!gCursorDrag);
-
-    gBitmapReloadingCue = LoadBitmap(GetModuleHandle(nullptr), MAKEINTRESOURCE(IDB_RELOADING_CUE));
-    CrashIf(!gBitmapReloadingCue);
+    auto h = GetModuleHandleA(nullptr);
+    gCursorDrag = LoadCursor(h, MAKEINTRESOURCE(IDC_CURSORDRAG));
+    gBitmapReloadingCue = LoadBitmap(h, MAKEINTRESOURCE(IDB_RELOADING_CUE));
     return true;
 }
 
@@ -813,7 +736,6 @@ Learn more at https://www.sumatrapdfreader.org/docs/Corrupted-installation
     dialogConfig.pszMainIcon = TD_ERROR_ICON;
 
     auto hr = TaskDialogIndirect(&dialogConfig, nullptr, nullptr, nullptr);
-    CrashIf(hr == E_INVALIDARG);
     HandleRedirectedConsoleOnShutdown();
     ::ExitProcess(1);
 }
@@ -865,8 +787,7 @@ static void ShowInstallerHelp() {
     dialogConfig.dwCommonButtons = TDCBF_OK_BUTTON;
     dialogConfig.pszMainIcon = TD_INFORMATION_ICON;
 
-    auto hr = TaskDialogIndirect(&dialogConfig, nullptr, nullptr, nullptr);
-    CrashIf(hr == E_INVALIDARG);
+    TaskDialogIndirect(&dialogConfig, nullptr, nullptr, nullptr);
 }
 
 // in Installer.cpp
@@ -914,8 +835,7 @@ static void ShowNoAdminErrorMessage() {
     dialogConfig.dwCommonButtons = TDCBF_OK_BUTTON;
     dialogConfig.pszMainIcon = TD_INFORMATION_ICON;
 
-    auto hr = TaskDialogIndirect(&dialogConfig, nullptr, nullptr, nullptr);
-    CrashIf(hr == E_INVALIDARG);
+    TaskDialogIndirect(&dialogConfig, nullptr, nullptr, nullptr);
 }
 
 // non-admin process cannot send DDE messages to admin process
@@ -967,6 +887,7 @@ static void testLogf() {
 
 // in mupdf_load_system_font.c
 extern "C" void destroy_system_font_list();
+extern void DeleteManualBrowserWindow();
 
 int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     int exitCode = 1; // by default it's error
@@ -980,8 +901,6 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     WindowTab* tabToSelect = nullptr;
     const char* logFilePath = nullptr;
     Vec<SessionData*>* sessionData = nullptr;
-
-    CrashIf(hInstance != GetInstance());
 
     supressThrowFromNew();
 
@@ -1143,7 +1062,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 #endif
 
     if (flags.appdataDir) {
-        SetAppDataPath(flags.appdataDir);
+        SetAppDataDir(flags.appdataDir);
     }
 
 #if defined(DEBUG)
@@ -1157,23 +1076,11 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
     DetectExternalViewers();
 
+    gRenderCache = new RenderCache();
+
     LoadSettings();
     UpdateGlobalPrefs(flags);
     SetCurrentLang(flags.lang ? flags.lang : gGlobalPrefs->uiLanguage);
-
-#if defined(DEBUG)
-    void TestBrowser(); // scratch.cpp
-    if (flags.testBrowser) {
-        TestBrowser();
-        return 0;
-    }
-
-    void TestUngzip();
-    if (false) {
-        TestUngzip();
-        return 0;
-    }
-#endif
 
     if (flags.showConsole) {
         RedirectIOToConsole();
@@ -1189,15 +1096,14 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
 
     gCrashOnOpen = flags.crashOnOpen;
 
-    gRenderCache.textColor = ThemeDocumentColors(gRenderCache.backgroundColor);
-    // logfa("retrieved doc colors in WinMain: 0x%x 0x%x\n", gRenderCache.textColor, gRenderCache.backgroundColor);
+    gRenderCache->textColor = ThemeDocumentColors(gRenderCache->backgroundColor);
+    // logfa("retrieved doc colors in WinMain: 0x%x 0x%x\n", gRenderCache->textColor, gRenderCache->backgroundColor);
 
     gIsStartup = true;
     if (!RegisterWinClass()) {
         goto Exit;
     }
 
-    CrashIf(hInstance != GetModuleHandle(nullptr));
     if (!InstanceInit()) {
         goto Exit;
     }
@@ -1402,8 +1308,7 @@ ContinueOpenWindow:
 
     // only hide newly missing files when showing the start page on startup
     if (showStartPage && gFileHistory.Get(0)) {
-        gFileExistenceChecker = new FileExistenceChecker();
-        gFileExistenceChecker->Start();
+        RemoveNonExistentFilesAsync();
     }
     // call this once it's clear whether Perm::SavePreferences has been granted
     RegisterSettingsForFileChanges();
@@ -1429,13 +1334,14 @@ ContinueOpenWindow:
 
     exitCode = RunMessageLoop();
     SafeCloseHandle(&hMutex);
-    CleanUpThumbnailCache(gFileHistory);
+    CleanUpThumbnailCache();
 
 Exit:
     logf("Exiting with exit code: %d\n", exitCode);
     UnregisterSettingsForFileChanges();
 
     HandleRedirectedConsoleOnShutdown();
+    DeleteManualBrowserWindow();
 
     LaunchFileIfExists(logFilePath);
     if (AreDangerousThreadsPending()) {
@@ -1465,12 +1371,17 @@ Exit:
     CleanupEngineDjVu();
     destroy_system_font_list();
 
+    // TODO: if needed, I could replace it with AtomicBool gFileExistenceInProgress
+    // alternatively I can set AtomicBool gAppShutdown and have various threads
+    // abort quickly if IsAppShuttingDown()
+#if 0
     // wait for FileExistenceChecker to terminate
     // (which should be necessary only very rarely)
     while (gFileExistenceChecker) {
         Sleep(10);
         uitask::DrainQueue();
     }
+#endif
 
     mui::Destroy();
     uitask::Destroy();
@@ -1479,7 +1390,7 @@ Exit:
     FreeAcceleratorTables();
 
     FileWatcherWaitForShutdown();
-
+    delete gRenderCache;
     SaveCallstackLogs();
     dbghelp::FreeCallstackLogs();
 

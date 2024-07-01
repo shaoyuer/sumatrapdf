@@ -1,4 +1,4 @@
-/* Copyright 2022 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2024 the SumatraPDF project authors (see AUTHORS file).
    License: Simplified BSD */
 
 #include "utils/BaseUtil.h"
@@ -13,6 +13,11 @@
 #include "utils/HttpUtil.h"
 #include "utils/LzmaSimpleArchive.h"
 #include "utils/WinUtil.h"
+
+#include "wingui/UIModels.h"
+#include "wingui/Layout.h"
+#include "wingui/WinGui.h"
+#include "wingui/WebView.h"
 
 #include "Settings.h"
 #include "GlobalPrefs.h"
@@ -111,62 +116,69 @@ static bool GetModules(str::Str& s, bool additionalOnly) {
     return isWine;
 }
 
-// if reportCond this is building for ReportIf() / ReportIfQuick()
-// otherwise this is a crsah
-static char* BuildCrashInfoText(const char* reportCond, bool noCallstack) {
+char* BuildCrashInfoText(const char* condStr, bool isCrash, bool captureCallstack) {
     str::Str s(16 * 1024, gCrashHandlerAllocator);
-    if (reportCond) {
+    if (!isCrash) {
+        captureCallstack = true;
         s.Append("Type: debug report (not crash)\n");
+    }
+    if (condStr) {
         s.Append("Cond: ");
-        s.Append(reportCond);
+        s.Append(condStr);
         s.Append("\n");
     }
     if (gSystemInfo) {
         s.Append(gSystemInfo);
-    }
-
-    GetStressTestInfo(&s);
-    s.Append("\n");
-
-    bool addCallstack = !noCallstack;
-    if (reportCond) {
-        // this is not a crash but debug report, we don't have an exception
-        if (addCallstack) {
-            s.Append("\nCrashed thread:\n");
-            dbghelp::GetCurrentThreadCallstack(s);
-        }
-    } else {
-        dbghelp::GetExceptionInfo(s, gMei.ExceptionPointers);
-    }
-
-    if (addCallstack) {
-        dbghelp::GetAllThreadsCallstacks(s);
         s.Append("\n");
     }
 
-    s.Append(gModulesInfo);
-    s.Append("\nModules loaded later:\n");
-    GetModules(s, true);
+    //    GetStressTestInfo(&s);
 
-    s.Append("\n\n-------- Log -----------------\n\n");
+    if (gMei.ExceptionPointers) {
+        // those are only set when we capture exception
+        dbghelp::GetExceptionInfo(s, gMei.ExceptionPointers);
+        s.Append("\n");
+    } else {
+        // GetExceptionInfo() also adds current thread callstack
+        if (captureCallstack) {
+            s.Append("\nCrashed thread:\n");
+            dbghelp::GetCurrentThreadCallstack(s);
+            s.Append("\n");
+        }
+    }
+
+    s.Append("\n-------- Log -----------------\n\n");
     s.Append(gLogBuf->LendData());
 
     if (gSettingsFile) {
         s.Append("\n\n----- Settings file ----------\n\n");
         s.Append(gSettingsFile);
+        s.Append("\n\n");
+    }
+
+    s.Append("\n-------- Modules   ----------\n\n");
+    s.Append(gModulesInfo);
+    s.Append("\nModules loaded later:\n");
+    GetModules(s, true);
+
+    if (captureCallstack) {
+        s.Append("\n-------- All Threads ----------\n\n");
+        dbghelp::GetAllThreadsCallstacks(s);
+        s.Append("\n");
     }
 
     return s.StealData();
 }
 
-static void SaveCrashInfo(const ByteSlice& d) {
+void SaveCrashInfo(const ByteSlice& d) {
     if (!gCrashFilePath) {
         return;
     }
+    dir::CreateForFile(gCrashFilePath);
     file::WriteFile(gCrashFilePath, d);
 }
 
-static void UploadCrashReport(const ByteSlice& d) {
+void UploadCrashReport(const ByteSlice& d) {
     log("UploadCrashReport()\n");
     if (d.empty()) {
         return;
@@ -228,6 +240,11 @@ static bool DownloadAndUnzipSymbols(const char* symDir) {
         return false;
     }
 
+    if (!dir::CreateAll(symDir)) {
+        logf("CrashHandlerDownloadSymbols: couldn't create symbols dir '%s'\n", gSymbolsDir);
+        return false;
+    }
+
     logf("DownloadAndUnzipSymbols: symDir: '%s', url: '%s'\n", symDir, gSymbolsUrl);
     if (!symDir || !dir::Exists(symDir)) {
         log("DownloadAndUnzipSymbols: exiting because symDir doesn't exist\n");
@@ -252,131 +269,123 @@ static bool DownloadAndUnzipSymbols(const char* symDir) {
     return ok;
 }
 
-bool InitializeDbgHelp() {
+bool CrashHandlerDownloadSymbols() {
+    return DownloadAndUnzipSymbols(gSymbolsDir);
+}
+
+bool AreSymbolsDownloaded(const char* symDir) {
+    TempStr path = path::JoinTemp(symDir, "SumatraPDF.pdb");
+    if (file::Exists(path)) {
+        logf("AreSymbolsDownloaded(): exist in '%s', symDir: '%s'\n", path, symDir);
+        return true;
+    }
+    TempStr exePath = GetExePathTemp();
+    exePath = str::ReplaceTemp(exePath, ".exe", ".pdb");
+    if (file::Exists(exePath)) {
+        logf("AreSymbolsDownloaded(): exist in '%s', symDir: '%s'\n", exePath, symDir);
+        return true;
+    }
+    logf("AreSymbolsDownloaded(): not downloaded, symDir: '%s'\n", symDir);
+    return false;
+}
+
+bool InitializeDbgHelp(bool force) {
     TempWStr ws = ToWStrTemp(gSymbolPath);
-    if (!dbghelp::Initialize(ws, false)) {
-        logf("InitializeDbgHelp: dbghelp::Initialize('%s') failed\n", gSymbolPath);
+    if (!dbghelp::Initialize(ws, force)) {
+        logf("InitializeDbgHelp: dbghelp::Initialize('%s'), force: %d failed\n", gSymbolPath, (int)force);
         return false;
     }
 
     if (!dbghelp::HasSymbols()) {
-        log("InitializeDbgHelp(): dbghelp::HasSymbols() failed\n");
+        logf("InitializeDbgHelp(): dbghelp::HasSymbols(), gSymbolPath: '%s' force: %d failed\n", gSymbolPath,
+             (int)force);
         return false;
     }
     log("InitializeDbgHelp(): did initialize ok\n");
     return true;
 }
 
-bool CrashHandlerDownloadSymbols() {
-    log("CrashHandlerDownloadSymbols()\n");
-
-    if (!dir::CreateAll(gSymbolsDir)) {
-        logf("CrashHandlerDownloadSymbols: couldn't create symbols dir '%s'\n", gSymbolsDir);
-        return false;
+bool DownloadSymbolsIfNeeded() {
+    logf("DownloadSymbolsIfNeeded(), gSymbolsDir: '%s'\n", gSymbolsDir);
+    if (!AreSymbolsDownloaded(gSymbolsDir)) {
+        bool ok = CrashHandlerDownloadSymbols();
+        if (!ok) {
+            return false;
+        }
     }
-
-    if (!DownloadAndUnzipSymbols(gSymbolsDir)) {
-        log("CrashHandlerDownloadSymbols: failed to download symbols\n");
-        return false;
-    }
-    return true;
+    return InitializeDbgHelp(false);
 }
 
+#if !defined(UPLOAD_REPORT)
+void _uploadDebugReport(const char*, bool, bool) {
+    // no-op in
+}
+#else
 // like crash report, but can be triggered without a crash
-void _uploadDebugReport(const char* condStr, bool noCallstack) {
+void _uploadDebugReport(const char* condStr, bool isCrash, bool captureCallstack) {
     // we want to avoid submitting multiple reports for the same
     // condition. I'm too lazy to implement tracking this granularly
     // so only allow once submission in a given session
     static bool didSubmitDebugReport = false;
 
-    if (didSubmitDebugReport) {
-        return;
+    log("_uploadDebugReport");
+    if (condStr) {
+        log(condStr);
     }
 
-    didSubmitDebugReport = true;
     // don't send report if this is me debugging
     if (IsDebuggerPresent()) {
         DebugBreak();
         return;
     }
 
-    if (!gIsPreReleaseBuild) {
-        // only enabled for pre-release builds, don't want lots of non-crash
-        // reports from official release
+    if (didSubmitDebugReport) {
         return;
     }
+    didSubmitDebugReport = true;
 
-    if (gIsDebugBuild) {
-        // exclude debug builds. Those are most likely other people modyfing Sumatra
-        return;
+    // no longer can happen i.e. we exclude non-crashes from release builds via #ifdef
+#if 0
+    if (!isCrash) {
+        if (!gIsPreReleaseBuild) {
+            // only enabled for pre-release builds, don't want lots of non-crash
+            // reports from official release
+            return;
+        }
+
+        if (gIsDebugBuild) {
+            // exclude debug builds. Those are most likely other people modyfing Sumatra
+            return;
+        }
     }
+#endif
 
-    logf("uploadDebugReport: %s\n", condStr);
     if (!CrashHandlerCanUseNet()) {
         return;
     }
 
-    logf("_uploadDebugReport: noCallstack: %d, gSymbolPath: '%s'\n", (int)noCallstack, gSymbolPath);
+    logf("_uploadDebugReport: isCrash: %d, captureCallstack: %d, gSymbolPath: '%s'\n", (int)isCrash,
+         (int)captureCallstack, gSymbolPath);
 
-    bool needsSymbols = !noCallstack;
-    if (needsSymbols) {
+    if (captureCallstack) {
         // we proceed even if we fail to download symbols
-        bool ok = InitializeDbgHelp();
-        if (!ok) {
-            ok = CrashHandlerDownloadSymbols();
-            if (ok) {
-                InitializeDbgHelp();
-            }
-        }
+        DownloadSymbolsIfNeeded();
     }
 
-    auto s = BuildCrashInfoText(condStr, noCallstack);
+    auto s = BuildCrashInfoText(condStr, isCrash, captureCallstack);
     if (str::IsEmpty(s)) {
         log("_uploadDebugReport(): skipping because !BuildCrashInfoText()\n");
         return;
     }
+
     ByteSlice d(s);
-    // SaveCrashInfo(d);
     UploadCrashReport(d);
+    SaveCrashInfo(d);
     // gCrashHandlerAllocator->Free((const void*)d.data());
     log(s);
     log("_uploadDebugReport() finished\n");
 }
-
-// If we can't resolve the symbols, we assume it's because we don't have symbols
-// so we'll try to download them and retry. If we can resolve symbols, we'll
-// get the callstacks etc. and submit to our server for analysis.
-void TryUploadCrashReport() {
-    log("TryUploadCrashReport()\n");
-    if (!CrashHandlerCanUseNet()) {
-        log("TryUploadCrashReport(): skipping because !CrashHandlerCanUseNet()\n");
-        return;
-    }
-
-    logf("TryUploadCrashReport: gSymbolPathW: '%s'\n", gSymbolPath);
-
-    bool ok = InitializeDbgHelp();
-    if (ok) {
-        // we preceed even if we can't download symbols or initialize dbghelp
-        ok = CrashHandlerDownloadSymbols();
-        if (!ok) {
-            log("TryUploadCrashReport(): CrashHandlerDownloadSymbols() failed\n");
-        } else {
-            InitializeDbgHelp();
-        }
-    }
-
-    char* sv = BuildCrashInfoText(nullptr, true);
-    if (str::IsEmpty(sv)) {
-        log("TryUploadCrashReport(): skipping because !BuildCrashInfoText()\n");
-        return;
-    }
-    ByteSlice d = sv;
-    SaveCrashInfo(d);
-    UploadCrashReport(d);
-    // gCrashHandlerAllocator->Free((const void*)d.data());
-    log("TryUploadCrashReport() finished\n");
-}
+#endif
 
 static DWORD WINAPI CrashDumpThread(LPVOID) {
     WaitForSingleObject(gDumpEvent, INFINITE);
@@ -384,7 +393,8 @@ static DWORD WINAPI CrashDumpThread(LPVOID) {
         return 0;
     }
 
-    TryUploadCrashReport();
+    log("CrashDumpThread\n");
+    _uploadDebugReport(nullptr, true, true);
 
     // always write a MiniDump (for the latest crash only)
     // set the SUMATRAPDF_FULLDUMP environment variable for more complete dumps
@@ -403,7 +413,7 @@ static LONG WINAPI CrashDumpVectoredExceptionHandler(EXCEPTION_POINTERS* excepti
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
-    gReducedLogging = true;
+    //    gReducedLogging = true;
     log("CrashDumpVectoredExceptionHandler\n");
 
     static bool wasHere = false;
@@ -436,7 +446,7 @@ static LONG WINAPI CrashDumpExceptionHandler(EXCEPTION_POINTERS* exceptionInfo) 
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
-    gReducedLogging = true;
+    //    gReducedLogging = true;
     log("CrashDumpExceptionHandler\n");
 
     static bool wasHere = false;
@@ -500,21 +510,6 @@ static void GetProcessorName(str::Str& s) {
     }
 }
 
-static void GetMachineName(str::Str& s) {
-    char* s1 = ReadRegStrTemp(HKEY_LOCAL_MACHINE, "HARDWARE\\DESCRIPTION\\System\\BIOS", "SystemFamily");
-    char* s2 = ReadRegStrTemp(HKEY_LOCAL_MACHINE, "HARDWARE\\DESCRIPTION\\System\\BIOS", "SystemVersion");
-
-    if (!s1 && !s2) {
-        // no-op
-    } else if (!s1) {
-        s.AppendFmt("Machine: %s\n", s2);
-    } else if (!s2 || str::EqI(s1, s2)) {
-        s.AppendFmt("Machine: %s\n", s1);
-    } else {
-        s.AppendFmt("Machine: %s %s\n", s1, s2);
-    }
-}
-
 #define GFX_DRIVER_KEY_FMT "SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\%04d"
 
 static void GetGraphicsDriverInfo(str::Str& s) {
@@ -548,32 +543,81 @@ static void GetGraphicsDriverInfo(str::Str& s) {
     }
 }
 
-static void GetLanguage(str::Str& s) {
-    char country[32] = {}, lang[32]{};
-    GetLocaleInfoA(LOCALE_USER_DEFAULT, LOCALE_SISO3166CTRYNAME, country, dimof(country) - 1);
-    GetLocaleInfoA(LOCALE_USER_DEFAULT, LOCALE_SISO639LANGNAME, lang, dimof(lang) - 1);
-    s.AppendFmt("Lang: %s %s\n", lang, country);
-}
-
 static void GetSystemInfo(str::Str& s) {
     SYSTEM_INFO si;
     GetSystemInfo(&si);
     s.AppendFmt("Number Of Processors: %d\n", si.dwNumberOfProcessors);
     GetProcessorName(s);
 
-    MEMORYSTATUSEX ms;
-    ms.dwLength = sizeof(ms);
-    GlobalMemoryStatusEx(&ms);
+    {
+        MEMORYSTATUSEX ms;
+        ms.dwLength = sizeof(ms);
+        GlobalMemoryStatusEx(&ms);
 
-    float physMemGB = (float)ms.ullTotalPhys / (float)(1024 * 1024 * 1024);
-    float totalPageGB = (float)ms.ullTotalPageFile / (float)(1024 * 1024 * 1024);
-    DWORD usedPerc = ms.dwMemoryLoad;
-    s.AppendFmt("Physical Memory: %.2f GB\nCommit Charge Limit: %.2f GB\nMemory Used: %d%%\n", physMemGB, totalPageGB,
-                usedPerc);
+        float physMemGB = (float)ms.ullTotalPhys / (float)(1024 * 1024 * 1024);
+        float totalPageGB = (float)ms.ullTotalPageFile / (float)(1024 * 1024 * 1024);
+        DWORD usedPerc = ms.dwMemoryLoad;
+        s.AppendFmt("Physical Memory: %.2f GB\nCommit Charge Limit: %.2f GB\nMemory Used: %d%%\n", physMemGB,
+                    totalPageGB, usedPerc);
+    }
+    {
+        TempStr ver = GetWebView2VersionTemp();
+        if (str::IsEmpty(ver)) {
+            ver = (TempStr) "no WebView2 installed";
+        }
+        s.AppendFmt("WebView2: %s\n", ver);
+    }
+    {
+        // get computer name
+        char* s1 = ReadRegStrTemp(HKEY_LOCAL_MACHINE, "HARDWARE\\DESCRIPTION\\System\\BIOS", "SystemFamily");
+        char* s2 = ReadRegStrTemp(HKEY_LOCAL_MACHINE, "HARDWARE\\DESCRIPTION\\System\\BIOS", "SystemVersion");
 
-    GetMachineName(s);
-    GetLanguage(s);
+        if (!s1 && !s2) {
+            // no-op
+        } else if (!s1) {
+            s.AppendFmt("Machine: %s\n", s2);
+        } else if (!s2 || str::EqI(s1, s2)) {
+            s.AppendFmt("Machine: %s\n", s1);
+        } else {
+            s.AppendFmt("Machine: %s %s\n", s1, s2);
+        }
+    }
+    {
+        // get language
+        char country[32] = {}, lang[32]{};
+        GetLocaleInfoA(LOCALE_USER_DEFAULT, LOCALE_SISO3166CTRYNAME, country, dimof(country) - 1);
+        GetLocaleInfoA(LOCALE_USER_DEFAULT, LOCALE_SISO639LANGNAME, lang, dimof(lang) - 1);
+        s.AppendFmt("Lang: %s %s\n", lang, country);
+    }
     GetGraphicsDriverInfo(s);
+    {
+        auto cpu = CpuID();
+        s.Append("CPU: ");
+        if (cpu & kCpuMMX) {
+            s.Append("MMX ");
+        }
+        if (cpu & kCpuSSE) {
+            s.Append("SSE ");
+        }
+        if (cpu & kCpuSSE2) {
+            s.Append("SSE2 ");
+        }
+        if (cpu & kCpuSSE3) {
+            s.Append("SSE3 ");
+        }
+        if (cpu & kCpuSSE41) {
+            s.Append("SSE41 ");
+        }
+        if (cpu & kCpuSSE42) {
+            s.Append("SSE42 ");
+        }
+        if (cpu & kCpuAVX) {
+            s.Append("AVX ");
+        }
+        if (cpu & kCpuAVX2) {
+            s.Append("AVX2 ");
+        }
+    }
 
     // Note: maybe more information, like:
     // * processor capabilities (mmx, sse, sse2 etc.)
@@ -600,8 +644,6 @@ https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/symbol-path
 http://p-nand-q.com/python/procmon.html
 https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/debugger-download-tools
 
-
-
 Setting symbol path:
 add GetEnvironmentVariableA("_NT_SYMBOL_PATH", ..., ...)
 add GetEnvironmentVariableA("_NT_ALT_SYMBOL_PATH ", ..., ...)
@@ -611,19 +653,18 @@ dbghelp.dll should be installed with os but might be outdated
 for symbols server symsrv.dll is needed, installed with debug tools for windows
 */
 
-static bool gAddNtSymbolPath = true;
-static bool gAddSymbolServer = true;
-static bool gAddExeDir = true;
+static bool gAddNtSymbolPath = false;
+static bool gAddSymbolServer = false;
+static bool gAddExeDir = false;
 
 static void BuildSymbolPath(const char* symDir) {
     str::Str path(1024);
 
     bool symDirExists = dir::Exists(symDir);
 
-    if (symDirExists) {
-        path.Append(symDir);
-        path.Append(";");
-    }
+    // at this point symDir might not exist but we add it anyway
+    path.Append(symDir);
+    path.Append(";");
 
     // in debug builds the symbols are in the same directory as .exe
     if (gIsDebugBuild || gAddExeDir) {
@@ -657,6 +698,7 @@ static void BuildSymbolPath(const char* symDir) {
 
     char* p = path.CStr();
     str::ReplaceWithCopy(&gSymbolPath, p);
+    logf("BuildSymbolPath: gSymbolPath '%s', symDir '%s'\n", gSymbolPath, symDir);
 }
 
 bool SetSymbolsDir(const char* symDir) {
@@ -710,7 +752,7 @@ static char* BuildSymbolsUrl() {
 }
 
 void InstallCrashHandler(const char* crashDumpPath, const char* crashFilePath, const char* symDir) {
-    CrashIf(gDumpEvent || gDumpThread);
+    ReportIf(gDumpEvent || gDumpThread);
 
     if (!crashDumpPath) {
         log("InstallCrashHandler: skipping because !crashDumpPath\n");

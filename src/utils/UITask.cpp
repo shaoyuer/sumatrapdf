@@ -33,13 +33,19 @@ static LRESULT CALLBACK WndProcTaskDispatch(HWND hwnd, UINT msg, WPARAM wp, LPAR
         auto func = (std::function<void()>*)lp;
         int taskId = (int)wp;
         // logf("uitask::WndPorcTaskDispatch: about to free func 0x%p\n", (void*)func);
-        auto name = seqstrings::IdxToStr(gTaskNames, taskId);
-        if (!name) {
-            name = "not found";
+        // don't log most frequent for less spammy logs
+        bool skipLog = taskId == TaskRepaintAsync;
+        if (!skipLog) {
+            auto name = seqstrings::IdxToStr(gTaskNames, taskId);
+            if (!name) {
+                name = "not found";
+            }
+            logf("uitask::WndProcTaskDispatch: will execute taskID: %d name: %s\n", taskId, name);
         }
-        logf("uitask::WndProcTaskDispatch: will execute taskID: %d name: %s\n", taskId, name);
         (*func)();
-        logf("uitask::WndProcTaskDispatch: did execute, will delete func 0x%p\n", (void*)func);
+        if (!skipLog) {
+            logf("uitask::WndProcTaskDispatch: did execute, will delete func 0x%p\n", (void*)func);
+        }
         delete func;
         return 0;
     }
@@ -51,13 +57,13 @@ void Initialize() {
     FillWndClassEx(wcex, UITASK_CLASS_NAME, WndProcTaskDispatch);
     RegisterClassEx(&wcex);
 
-    CrashIf(gTaskDispatchHwnd);
+    ReportIf(gTaskDispatchHwnd);
     gTaskDispatchHwnd = CreateWindow(UITASK_CLASS_NAME, L"UITask Dispatch Window", WS_OVERLAPPED, 0, 0, 0, 0,
                                      HWND_MESSAGE, nullptr, GetModuleHandle(nullptr), nullptr);
 }
 
 void DrainQueue() {
-    CrashIf(!gTaskDispatchHwnd);
+    ReportIf(!gTaskDispatchHwnd);
     MSG msg;
     UINT wmExecTask = GetExecuteTaskMessage();
     while (PeekMessage(&msg, gTaskDispatchHwnd, wmExecTask, wmExecTask, PM_REMOVE)) {

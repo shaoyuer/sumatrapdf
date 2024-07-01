@@ -189,7 +189,7 @@ bool IsEqual(const ByteSlice& d1, const ByteSlice& d2) {
     if (d1.sz == 0) {
         return true;
     }
-    CrashIf(!d1.d || !d2.d);
+    ReportIf(!d1.d || !d2.d);
     int res = memcmp(d1.d, d2.d, d1.sz);
     return res == 0;
 }
@@ -232,6 +232,10 @@ void Free(const u8* s) {
 
 void Free(const WCHAR* s) {
     free((void*)s);
+}
+
+void Free(const StrSpan& s) {
+    free(s.CStr());
 }
 
 void FreePtr(const char** s) {
@@ -462,13 +466,6 @@ void ReplacePtr(char** s, const char* snew) {
     ReplacePtr((const char**)s, snew);
 }
 
-void ReplacePtr(const WCHAR** s, const WCHAR* snew) {
-    if (*s != snew) {
-        str::Free(*s);
-        *s = (WCHAR*)snew;
-    }
-}
-
 void ReplaceWithCopy(const char** s, const char* snew) {
     if (*s != snew) {
         str::Free(*s);
@@ -488,17 +485,6 @@ void ReplaceWithCopy(char** s, const char* snew) {
         str::Free(*s);
         *s = str::Dup(snew);
     }
-}
-
-void ReplaceWithCopy(const WCHAR** s, const WCHAR* snew) {
-    if (*s != snew) {
-        str::Free(*s);
-        *s = str::Dup(snew);
-    }
-}
-
-void ReplaceWithCopy(WCHAR** s, const WCHAR* snew) {
-    ReplaceWithCopy((const WCHAR**)s, snew);
 }
 
 char* Join(Allocator* allocator, const char* s1, const char* s2, const char* s3, const char* s4, const char* s5) {
@@ -666,7 +652,7 @@ char* FmtVWithAllocator(Allocator* a, const char* fmt, va_list args) {
         int count = vsnprintf(buf, (size_t)bufCchSize, fmt, args);
         // happened in https://github.com/sumatrapdfreader/sumatrapdf/issues/878
         // when %S string had certain Unicode characters
-        CrashIf(count == -1);
+        ReportIf(count == -1);
         if (count < 0) {
             str::BufSet(buf, bufCchSize, "vsnprintf() returned -1");
             break;
@@ -1059,7 +1045,7 @@ bool IsAlNum(char c) {
    // TODO: this should be utf8-aware, see e.g. cbx\bug1234-*.cbr file
 */
 int CmpNatural(const char* a, const char* b) {
-    CrashAlwaysIf(!a || !b);
+    ReportIf(!a || !b);
     const char *aStart = a, *bStart = b;
     int diff = 0;
 
@@ -1255,7 +1241,7 @@ int StrToIdxIS(SeqStrings strs, const char* toFind) {
 // Given an index in the "array" of sequentially laid out strings,
 // returns a strings at that index.
 const char* IdxToStr(SeqStrings strs, int idx) {
-    CrashIf(idx < 0);
+    ReportIf(idx < 0);
     const char* s = strs;
     while (idx > 0) {
         Next(s);
@@ -1315,7 +1301,7 @@ static char* EnsureCap(Str* s, size_t needed) {
         newEls = (char*)Allocator::Realloc(s->allocator, s->els, allocSize);
     }
     if (!newEls) {
-        CrashAlwaysIf(InterlockedExchangeAdd(&gAllowAllocFailure, 0) == 0);
+        ReportIf(InterlockedExchangeAdd(&gAllowAllocFailure, 0) == 0);
         return nullptr;
     }
     s->els = newEls;
@@ -1324,7 +1310,7 @@ static char* EnsureCap(Str* s, size_t needed) {
 }
 
 static char* MakeSpaceAt(Str* s, size_t idx, size_t count) {
-    CrashIf(count == 0);
+    ReportIf(count == 0);
     u32 newLen = std::max(s->len, (u32)idx) + (u32)count;
     char* buf = EnsureCap(s, newLen);
     if (!buf) {
@@ -1409,22 +1395,22 @@ Str::~Str() {
 }
 
 char& Str::at(size_t idx) const {
-    CrashIf(idx >= (u32)len);
+    ReportIf(idx >= (u32)len);
     return els[idx];
 }
 
 char& Str::at(int idx) const {
-    CrashIf(idx < 0);
+    ReportIf(idx < 0);
     return at((size_t)idx);
 }
 
 char& Str::operator[](long idx) const {
-    CrashIf(idx < 0);
+    ReportIf(idx < 0);
     return at((size_t)idx);
 }
 
 char& Str::operator[](int idx) const {
-    CrashIf(idx < 0);
+    ReportIf(idx < 0);
     return at((size_t)idx);
 }
 
@@ -1457,6 +1443,10 @@ bool Str::InsertAt(size_t idx, char el) {
 
 bool Str::AppendChar(char c) {
     return InsertAt(len, c);
+}
+
+bool Str::Append(const StrSpan& s) {
+    return Append(s.CStr(), (size_t)s.Len());
 }
 
 bool Str::Append(const char* src, size_t count) {
@@ -1499,7 +1489,7 @@ char Str::RemoveLast() {
 }
 
 char& Str::Last() const {
-    CrashIf(0 == len);
+    ReportIf(0 == len);
     return at(len - 1);
 }
 
@@ -1665,7 +1655,7 @@ static WCHAR* EnsureCap(WStr* s, size_t needed) {
     }
 
     if (!newEls) {
-        CrashAlwaysIf(InterlockedExchangeAdd(&gAllowAllocFailure, 0) == 0);
+        ReportIf(InterlockedExchangeAdd(&gAllowAllocFailure, 0) == 0);
         return nullptr;
     }
     s->els = newEls;
@@ -1674,7 +1664,7 @@ static WCHAR* EnsureCap(WStr* s, size_t needed) {
 }
 
 static WCHAR* MakeSpaceAt(WStr* s, size_t idx, size_t count) {
-    CrashIf(count == 0);
+    ReportIf(count == 0);
     u32 newLen = std::max(s->len, (u32)idx) + (u32)count;
     WCHAR* buf = EnsureCap(s, newLen);
     if (!buf) {
@@ -1757,12 +1747,12 @@ WStr::~WStr() {
 }
 
 WCHAR& WStr::at(size_t idx) const {
-    CrashIf(idx >= len);
+    ReportIf(idx >= len);
     return els[idx];
 }
 
 WCHAR& WStr::at(int idx) const {
-    CrashIf(idx < 0);
+    ReportIf(idx < 0);
     return at((size_t)idx);
 }
 
@@ -1771,7 +1761,7 @@ WCHAR& WStr::operator[](size_t idx) const {
 }
 
 WCHAR& WStr::operator[](long idx) const {
-    CrashIf(idx < 0);
+    ReportIf(idx < 0);
     return at((size_t)idx);
 }
 
@@ -1780,7 +1770,7 @@ WCHAR& WStr::operator[](ULONG idx) const {
 }
 
 WCHAR& WStr::operator[](int idx) const {
-    CrashIf(idx < 0);
+    ReportIf(idx < 0);
     return at((size_t)idx);
 }
 
@@ -1849,7 +1839,7 @@ WCHAR WStr::RemoveLast() {
 }
 
 WCHAR& WStr::Last() const {
-    CrashIf(0 == len);
+    ReportIf(0 == len);
     return at(len - 1);
 }
 
@@ -1994,36 +1984,6 @@ bool EqI(const WCHAR* s1, const WCHAR* s2) {
     return 0 == _wcsicmp(s1, s2);
 }
 
-// compares two strings ignoring case and whitespace
-bool EqIS(const WCHAR* s1, const WCHAR* s2) {
-    if (s1 == s2) {
-        return true;
-    }
-    if (!s1 || !s2) {
-        return false;
-    }
-
-    while (*s1 && *s2) {
-        // skip whitespace
-        for (; IsWs(*s1); s1++) {
-            // do nothing
-        }
-        for (; IsWs(*s2); s2++) {
-            // do nothing
-        }
-
-        if (towlower(*s1) != towlower(*s2)) {
-            return false;
-        }
-        if (*s1) {
-            s1++;
-            s2++;
-        }
-    }
-
-    return !*s1 && !*s2;
-}
-
 bool EqN(const WCHAR* s1, const WCHAR* s2, size_t len) {
     if (s1 == s2) {
         return true;
@@ -2032,16 +1992,6 @@ bool EqN(const WCHAR* s1, const WCHAR* s2, size_t len) {
         return false;
     }
     return 0 == wcsncmp(s1, s2, len);
-}
-
-bool EqNI(const WCHAR* s1, const WCHAR* s2, size_t len) {
-    if (s1 == s2) {
-        return true;
-    }
-    if (!s1 || !s2) {
-        return false;
-    }
-    return 0 == _wcsnicmp(s1, s2, len);
 }
 
 bool IsEmpty(const WCHAR* s) {
@@ -2095,37 +2045,8 @@ WCHAR* FindChar(WCHAR* str, WCHAR c) {
     return (WCHAR*)wcschr(str, c);
 }
 
-const WCHAR* FindCharLast(const WCHAR* str, WCHAR c) {
-    return (const WCHAR*)wcsrchr(str, c);
-}
-
-WCHAR* FindCharLast(WCHAR* str, const WCHAR c) {
-    return wcsrchr(str, c);
-}
-
 const WCHAR* Find(const WCHAR* str, const WCHAR* find) {
     return wcsstr(str, find);
-}
-
-const WCHAR* FindI(const WCHAR* s, const WCHAR* toFind) {
-    if (!s || !toFind) {
-        return nullptr;
-    }
-
-    WCHAR first = towlower(*toFind);
-    if (!first) {
-        return s;
-    }
-    while (*s) {
-        WCHAR c = towlower(*s);
-        if (c == first) {
-            if (str::StartsWithI(s, toFind)) {
-                return s;
-            }
-        }
-        s++;
-    }
-    return nullptr;
 }
 
 char* ToUpperInPlace(char* s) {
@@ -2147,12 +2068,6 @@ WCHAR* ToLowerInPlace(WCHAR* s) {
 WCHAR* ToLower(const WCHAR* s) {
     WCHAR* s2 = str::Dup(s);
     return ToLowerInPlace(s2);
-}
-
-bool BufFmtV(WCHAR* buf, size_t bufCchSize, const WCHAR* fmt, va_list args) {
-    int count = _vsnwprintf_s(buf, bufCchSize, _TRUNCATE, fmt, args);
-    buf[bufCchSize - 1] = 0;
-    return (count >= 0) && ((size_t)count < bufCchSize);
 }
 
 WCHAR* FmtV(const WCHAR* fmt, va_list args) {
@@ -2190,33 +2105,6 @@ WCHAR* Format(const WCHAR* fmt, ...) {
     WCHAR* res = FmtV(fmt, args);
     va_end(args);
     return res;
-}
-
-// Trim whitespace characters, in-place, inside s.
-// Returns number of trimmed characters.
-size_t TrimWSInPlace(WCHAR* s, TrimOpt opt) {
-    size_t sLen = str::Len(s);
-    WCHAR* ns = s;
-    WCHAR* e = s + sLen;
-    WCHAR* ne = e;
-    if ((TrimOpt::Left == opt) || (TrimOpt::Both == opt)) {
-        while (IsWs(*ns)) {
-            ++ns;
-        }
-    }
-
-    if ((TrimOpt::Right == opt) || (TrimOpt::Both == opt)) {
-        while (((ne - 1) >= ns) && IsWs(ne[-1])) {
-            --ne;
-        }
-    }
-    *ne = 0;
-    size_t trimmed = (ns - s) + (e - ne);
-    if (ns != s) {
-        size_t toCopy = (sLen - trimmed + 1) * sizeof(WCHAR); // +1 for terminating 0
-        memmove(s, ns, toCopy);
-    }
-    return trimmed;
 }
 
 size_t TransCharsInPlace(WCHAR* str, const WCHAR* oldChars, const WCHAR* newChars) {
@@ -2284,7 +2172,7 @@ size_t NormalizeWSInPlace(WCHAR* str) {
 // handling buffers in OS-defined structures)
 // returns the number of characters written (without the terminating \0)
 int BufSet(char* dst, int cchDst, const char* src) {
-    CrashAlwaysIf(0 == cchDst || !dst);
+    ReportIf(0 == cchDst || !dst);
     if (!src) {
         *dst = 0;
         return 0;
@@ -2294,13 +2182,13 @@ int BufSet(char* dst, int cchDst, const char* src) {
     int toCopy = std::min(cchDst - 1, srcCchSize);
 
     errno_t err = strncpy_s(dst, (size_t)cchDst, src, (size_t)toCopy);
-    CrashIf(err || dst[toCopy] != '\0');
+    ReportIf(err || dst[toCopy] != '\0');
 
     return toCopy;
 }
 
 int BufSet(WCHAR* dst, int cchDst, const WCHAR* src) {
-    CrashAlwaysIf(0 == cchDst || !dst);
+    ReportIf(0 == cchDst || !dst);
     if (!src) {
         *dst = 0;
         return 0;
@@ -2319,7 +2207,7 @@ int BufSet(WCHAR* dst, int dstCchSize, const char* src) {
 }
 
 int BufAppend(WCHAR* dst, int cchDst, const WCHAR* s) {
-    CrashAlwaysIf(0 == cchDst);
+    ReportIf(0 == cchDst);
 
     int currDstCchLen = str::Leni(dst);
     if (currDstCchLen + 1 >= cchDst) {
@@ -2330,7 +2218,7 @@ int BufAppend(WCHAR* dst, int cchDst, const WCHAR* s) {
     int toCopy = std::min(left, srcCchSize);
 
     errno_t err = wcsncat_s(dst, cchDst, s, toCopy);
-    CrashIf(err || dst[currDstCchLen + toCopy] != '\0');
+    ReportIf(err || dst[currDstCchLen + toCopy] != '\0');
 
     return toCopy;
 }
@@ -2338,7 +2226,7 @@ int BufAppend(WCHAR* dst, int cchDst, const WCHAR* s) {
 // append as much of s at the end of dst (which must be properly null-terminated)
 // as will fit.
 int BufAppend(char* dst, int dstCch, const char* s) {
-    CrashAlwaysIf(0 == dstCch);
+    ReportIf(0 == dstCch);
 
     int currDstCchLen = str::Leni(dst);
     if (currDstCchLen + 1 >= dstCch) {
@@ -2349,7 +2237,7 @@ int BufAppend(char* dst, int dstCch, const char* s) {
     int toCopy = std::min(left, srcCchSize);
 
     errno_t err = strncat_s(dst, dstCch, s, toCopy);
-    CrashIf(err || dst[currDstCchLen + toCopy] != '\0');
+    ReportIf(err || dst[currDstCchLen + toCopy] != '\0');
 
     return toCopy;
 }
@@ -2434,7 +2322,7 @@ TempStr FormatRomanNumeralTemp(int n) {
    (e.g. ".hg" < "2.pdf" < "100.pdf" < "zzz")
 */
 int CmpNatural(const WCHAR* a, const WCHAR* b) {
-    CrashAlwaysIf(!a || !b);
+    ReportIf(!a || !b);
     const WCHAR *aStart = a, *bStart = b;
     int diff = 0;
 
@@ -2620,3 +2508,20 @@ TempStr GetFileNameTemp(const char* url) {
 }
 
 } // namespace url
+
+int ParseInt(const char* bytes) {
+    bool negative = *bytes == '-';
+    if (negative) {
+        bytes++;
+    }
+    int value = 0;
+    int overflowCheck = negative ? 1 : 0;
+    for (; str::IsDigit(*bytes); bytes++) {
+        value = value * 10 + (*bytes - '0');
+        // return 0 on overflow
+        if (value - overflowCheck < 0) {
+            return 0;
+        }
+    }
+    return negative ? -value : value;
+}

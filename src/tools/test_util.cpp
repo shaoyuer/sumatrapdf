@@ -28,6 +28,7 @@ extern void TrivialHtmlParser_UnitTests();
 extern void VecTest();
 extern void WinUtilTest();
 extern void StrFormatTest();
+extern void StrVecTest();
 
 int main(int, char**) {
     printf("Running unit tests\n");
@@ -47,6 +48,7 @@ int main(int, char**) {
     SquareTreeTest();
     StrFormatTest();
     StrTest();
+    StrVecTest();
     TrivialHtmlParser_UnitTests();
     VecTest();
     WinUtilTest();

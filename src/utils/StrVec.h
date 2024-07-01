@@ -22,19 +22,20 @@ struct StrVec {
     void Reset(StrVecPage* = nullptr);
 
     int Size() const;
+    bool IsEmpty() const;
     char* At(int i) const;
     StrSpan AtSpan(int i) const;
     char* operator[](int) const;
 
-    char* Append(const char* s, int sLen = -1);
-    char* SetAt(int idx, const char* s, int sLen = -1);
+    char* Append(const char*, int sLen = -1);
+    char* SetAt(int idx, const char*, int sLen = -1);
     char* InsertAt(int, const char*, int sLen = -1);
     char* RemoveAt(int);
     char* RemoveAtFast(int);
     bool Remove(const char*);
 
-    int Find(const char* sv, int startAt = 0) const;
-    int FindI(const char* sv, int startAt = 0) const;
+    int Find(const char*, int startAt = 0) const;
+    int FindI(const char*, int startAt = 0) const;
     bool Contains(const char*, int sLen = -1) const;
 
     struct iterator {
@@ -47,6 +48,7 @@ struct StrVec {
 
         iterator(const StrVec* v, int idx);
         char* operator*() const;
+        StrSpan Span() const;
         iterator& operator++();    // ++it
         iterator& operator++(int); // it++
         iterator& operator+(int);  // it += n

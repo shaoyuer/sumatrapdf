@@ -12,6 +12,7 @@
 #include "wingui/Layout.h"
 #include "wingui/UIModels.h"
 #include "wingui/WinGui.h"
+#include "wingui/WebView.h"
 
 #include "Settings.h"
 #include "GlobalPrefs.h"
@@ -20,6 +21,7 @@
 #include "Version.h"
 #include "SumatraConfig.h"
 #include "Translations.h"
+#include "Annotation.h"
 #include "SumatraPDF.h"
 #include "Flags.h"
 #include "ProgressUpdateUI.h"
@@ -246,7 +248,7 @@ static void NotifyUserOfUpdate(UpdateInfo* updateInfo) {
     BOOL verificationFlagChecked = false;
 
     auto hr = TaskDialogIndirect(&dialogConfig, &buttonPressedId, nullptr, &verificationFlagChecked);
-    CrashIf(hr == E_INVALIDARG);
+    ReportIf(hr == E_INVALIDARG);
     bool doInstall = (hr == S_OK) && (buttonPressedId == kBtnIdInstall);
 
     auto installerPath = updateInfo->installerPath;
@@ -368,7 +370,7 @@ static DWORD ShowAutoUpdateDialog(HWND hwndParent, HttpRsp* rsp, UpdateCheck upd
     logf("ShowAutoUpdateDialog: starting to download '%s'\n", updateInfo->dlURL);
     gUpdateCheckInProgress = true;
     RunAsync([hwndForNotif, updateInfo] { // NOLINT
-        TempStr installerPath = path::GetTempFilePathTemp("sumatra-installer");
+        TempStr installerPath = GetTempFilePathTemp("sumatra-installer");
         // the installer must be named .exe or it won't be able to self-elevate
         // with "runas"
         installerPath = str::JoinTemp(installerPath, ".exe");
@@ -473,7 +475,7 @@ void CheckForUpdateAsync(MainWindow* win, UpdateCheck updateCheckType) {
 // we should copy ourselves over the existing file, launch ourselves and
 // tell our new copy to delete ourselves
 void UpdateSelfTo(const char* path) {
-    CrashIf(!path);
+    ReportIf(!path);
     if (!file::Exists(path)) {
         logf("UpdateSelfTo: failed because destination doesn't exist\n");
         return;

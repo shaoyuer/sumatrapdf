@@ -114,11 +114,24 @@ TempStr ReplaceTemp(const char* s, const char* toReplace, const char* replaceWit
     return result.StealData(GetTempAllocator());
 }
 
+TempStr ReplaceNoCaseTemp(const char* s, const char* toReplace, const char* replaceWith) {
+    int n = str::Leni(toReplace);
+    const char* pos = str::FindI(s, toReplace);
+    if (!pos) {
+        return (TempStr)s;
+    }
+    if (!memeq(pos, toReplace, n)) {
+        toReplace = (const char*)str::DupTemp(pos, n);
+    }
+    TempStr res = str::ReplaceTemp(s, toReplace, replaceWith);
+    return res;
+}
+
 } // namespace str
 
 TempStr ToUtf8Temp(const WCHAR* s, size_t cch) {
     if (!s) {
-        CrashIf((int)cch > 0);
+        ReportIf((int)cch > 0);
         return nullptr;
     }
     return strconv::WStrToUtf8(s, cch, GetTempAllocator());
@@ -126,7 +139,7 @@ TempStr ToUtf8Temp(const WCHAR* s, size_t cch) {
 
 TempWStr ToWStrTemp(const char* s, size_t cb) {
     if (!s) {
-        CrashIf((int)cb > 0);
+        ReportIf((int)cb > 0);
         return nullptr;
     }
     return strconv::Utf8ToWStr(s, cb, GetTempAllocator());

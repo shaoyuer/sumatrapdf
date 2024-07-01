@@ -9,6 +9,8 @@
 #include "utils/ScopedWin.h"
 #include "utils/WinUtil.h"
 
+#include <bitset>
+#include <intrin.h>
 #include <mlang.h>
 
 #include "utils/Log.h"
@@ -67,8 +69,8 @@ void EditSelectAll(HWND hwnd) {
 }
 
 int EditIdealDy(HWND hwnd, bool hasBorder, int lines) {
-    CrashIf(lines < 1);
-    CrashIf(lines > 256);
+    ReportIf(lines < 1);
+    ReportIf(lines > 256);
 
     HFONT hfont = HwndGetFont(hwnd);
     Size s1 = HwndMeasureText(hwnd, "Minimal", hfont);
@@ -170,7 +172,7 @@ Rect MapRectToWindow(Rect rect, HWND hwndFrom, HWND hwndTo) {
 }
 
 int MapWindowPoints(HWND hwndFrom, HWND hwndTo, Point* points, int nPoints) {
-    CrashIf(nPoints > 64);
+    ReportIf(nPoints > 64);
     POINT pnts[64];
     for (int i = 0; i < nPoints; i++) {
         pnts[i].x = points[i].x;
@@ -287,7 +289,7 @@ TempStr GetEnvVariableTemp(const char* name) {
         cchBufSize = res + 4; // +4 jic
         buf = AllocArrayTemp<WCHAR>(cchBufSize);
         res = GetEnvironmentVariableW(nameW, buf, cchBufSize);
-        CrashIf(res == 0 || res > cchBufSize);
+        ReportIf(res == 0 || res > cchBufSize);
     }
     return ToUtf8Temp(buf);
 }
@@ -331,13 +333,15 @@ bool IsProcessAndOsArchSame() {
 }
 
 TempStr GetLastErrorStrTemp(DWORD err) {
-    err = (err == 0) ? GetLastError() : err;
+    if (err == 0) {
+        err = GetLastError();
+    }
     if (err == 0) {
         return str::DupTemp("");
     }
     if (err == ERROR_INTERNET_EXTENDED_ERROR) {
-        char buf[4096] = {0};
-        DWORD bufSize = dimof(buf);
+        char buf[4096]{};
+        DWORD bufSize = dimof(buf) - 1;
         // TODO: ignoring a case where buffer is too small. 4 kB should be enough for everybody
         InternetGetLastResponseInfoA(&err, buf, &bufSize);
         buf[4095] = 0;
@@ -357,9 +361,10 @@ TempStr GetLastErrorStrTemp(DWORD err) {
 
 void LogLastError(DWORD err) {
     TempStr msg = GetLastErrorStrTemp(err);
-    if (str::Len(msg) > 0) {
-        logf("LogLastError: %s\n", msg);
+    if (msg == nullptr) {
+        msg = (TempStr) "";
     }
+    logf("LogLastError: 0x%x (%d) '%s'\n", (int)err, (int)err, msg);
 }
 
 void DbgOutLastError(DWORD err) {
@@ -400,7 +405,7 @@ TryAgainWOW64:
             val = AllocArray<WCHAR>(valLen / sizeof(WCHAR) + 1);
             res = RegQueryValueEx(hKey, valNameW, nullptr, nullptr, (LPBYTE)val, &valLen);
             if (ERROR_SUCCESS != res) {
-                str::ReplaceWithCopy(&val, nullptr);
+                str::FreePtr(&val);
             }
         }
         RegCloseKey(hKey);
@@ -616,7 +621,7 @@ TempStr GetTempDirTemp() {
         return {};
     }
     // TODO: should handle this
-    CrashIf(cch >= dimof(dir));
+    ReportIf(cch >= dimof(dir));
     return ToUtf8Temp(dir, cch);
 }
 
@@ -744,8 +749,17 @@ void HandleRedirectedConsoleOnShutdown() {
 // Return the full exe path of my own executable
 TempStr GetExePathTemp() {
     WCHAR buf[MAX_PATH]{};
-    GetModuleFileNameW(nullptr, buf, dimof(buf) - 1);
-    return ToUtf8Temp(buf);
+    DWORD nSize = dimof(buf) - 1;
+    auto h = GetInstance();
+    DWORD res = GetModuleFileNameW(h, buf, nSize);
+    if (res < nSize) {
+        return ToUtf8Temp(buf);
+    }
+    nSize = res + 2;
+    WCHAR* buf2 = Allocator::AllocArray<WCHAR>(nullptr, (size_t)nSize);
+    res = GetModuleFileNameW(h, buf, nSize);
+    ReportIf(res < nSize);
+    return ToUtf8Temp(buf2);
 }
 
 // Return directory where our executable is located
@@ -813,14 +827,10 @@ char* ResolveLnkTemp(const char* path) {
     return ToUtf8Temp(newPath);
 }
 
-bool CreateShortcut(const char* shortcutPathA, const char* exePathA, const char* argsA, const char* descriptionA,
+bool CreateShortcut(const char* shortcutPath, const char* exePath, const char* args, const char* description,
                     int iconIndex) {
+    TempWStr ws;
     ScopedCom com;
-
-    WCHAR* shortcutPath = ToWStrTemp(shortcutPathA);
-    WCHAR* exePath = ToWStrTemp(exePathA);
-    WCHAR* args = ToWStrTemp(argsA);
-    WCHAR* description = ToWStrTemp(descriptionA);
 
     ScopedComPtr<IShellLink> lnk;
     if (!lnk.Create(CLSID_ShellLink)) {
@@ -832,23 +842,27 @@ bool CreateShortcut(const char* shortcutPathA, const char* exePathA, const char*
         return false;
     }
 
-    HRESULT hr = lnk->SetPath(exePath);
+    ws = ToWStrTemp(exePath);
+    HRESULT hr = lnk->SetPath(ws);
     if (FAILED(hr)) {
         return false;
     }
 
-    lnk->SetWorkingDirectory(path::GetDirTemp(exePath));
+    lnk->SetWorkingDirectory(path::GetDirTemp(ws));
     // lnk->SetShowCmd(SW_SHOWNORMAL);
     // lnk->SetHotkey(0);
-    lnk->SetIconLocation(exePath, iconIndex);
+    lnk->SetIconLocation(ws, iconIndex);
     if (args) {
-        lnk->SetArguments(args);
+        ws = ToWStrTemp(args);
+        lnk->SetArguments(ws);
     }
     if (description) {
-        lnk->SetDescription(description);
+        ws = ToWStrTemp(description);
+        lnk->SetDescription(ws);
     }
 
-    hr = file->Save(shortcutPath, TRUE);
+    ws = ToWStrTemp(shortcutPath);
+    hr = file->Save(ws, TRUE);
     return SUCCEEDED(hr);
 }
 
@@ -1252,7 +1266,7 @@ bool IsCursorOverWindow(HWND hwnd) {
 TempStr HwndGetClassName(HWND hwnd) {
     WCHAR buf[512] = {0};
     int n = GetClassNameW(hwnd, buf, dimof(buf));
-    CrashIf(n == 0);
+    ReportIf(n == 0);
     return ToUtf8Temp(buf);
 }
 
@@ -1308,7 +1322,6 @@ char* GetDefaultPrinterNameTemp() {
 }
 
 static bool CopyOrAppendTextToClipboard(const WCHAR* text, bool appendOnly) {
-    CrashIf(!text);
     if (!text) {
         return false;
     }
@@ -1649,7 +1662,7 @@ HDC DoubleBuffer::GetDC() const {
 }
 
 void DoubleBuffer::Flush(HDC hdc) const {
-    CrashIf(hdc == hdcBuffer);
+    ReportIf(hdc == hdcBuffer);
     if (hdcBuffer) {
         BitBlt(hdc, rect.x, rect.y, rect.dx, rect.dy, hdcBuffer, 0, 0, SRCCOPY);
     }
@@ -1691,18 +1704,18 @@ void DeferWinPosHelper::MoveWindow(HWND hWnd, Rect r) {
 }
 
 void MenuSetChecked(HMENU m, int id, bool isChecked) {
-    CrashIf(id < 0);
+    ReportIf(id < 0);
     CheckMenuItem(m, (UINT)id, MF_BYCOMMAND | (isChecked ? MF_CHECKED : MF_UNCHECKED));
 }
 
 bool MenuSetEnabled(HMENU m, int id, bool isEnabled) {
-    CrashIf(id < 0);
+    ReportIf(id < 0);
     BOOL ret = EnableMenuItem(m, (UINT)id, MF_BYCOMMAND | (isEnabled ? MF_ENABLED : MF_GRAYED));
     return ret != -1;
 }
 
 void MenuRemove(HMENU m, int id) {
-    CrashIf(id < 0);
+    ReportIf(id < 0);
     RemoveMenu(m, (UINT)id, MF_BYCOMMAND);
 }
 
@@ -1713,7 +1726,7 @@ void MenuEmpty(HMENU m) {
 }
 
 void MenuSetText(HMENU m, int id, const WCHAR* s) {
-    CrashIf(id < 0);
+    ReportIf(id < 0);
     MENUITEMINFOW mii{};
     mii.cbSize = sizeof(mii);
     mii.fMask = MIIM_STRING;
@@ -2021,8 +2034,8 @@ static bool IsPalettedBitmap(DIBSECTION& info, int nBytes) {
 }
 
 COLORREF GetPixel(BitmapPixels* bitmap, int x, int y) {
-    CrashIf(x < 0 || x >= bitmap->size.dx);
-    CrashIf(y < 0 || y >= bitmap->size.dy);
+    ReportIf(x < 0 || x >= bitmap->size.dx);
+    ReportIf(y < 0 || y >= bitmap->size.dy);
     u8* pixels = bitmap->pixels;
     u8* pixel = pixels + y * bitmap->nBytesPerRow + x * bitmap->nBytesPerPixel;
     // color order in DIB is blue-green-red-alpha
@@ -2032,7 +2045,7 @@ COLORREF GetPixel(BitmapPixels* bitmap, int x, int y) {
     } else if (4 == bitmap->nBytesPerPixel) {
         c = RGB(pixel[3], pixel[2], pixel[1]);
     } else {
-        CrashIf(true);
+        ReportIf(true);
     }
     return c;
 }
@@ -2042,7 +2055,7 @@ BitmapPixels* GetBitmapPixels(HBITMAP hbmp) {
 
     DIBSECTION info{};
     int nBytes = GetObject(hbmp, sizeof(info), &info);
-    CrashIf(nBytes < sizeof(info.dsBm));
+    ReportIf(nBytes < sizeof(info.dsBm));
     Size size(info.dsBm.bmWidth, info.dsBm.bmHeight);
 
     res->size = size;
@@ -2085,7 +2098,7 @@ BitmapPixels* GetBitmapPixels(HBITMAP hbmp) {
     HDC hdc = CreateCompatibleDC(nullptr);
     int bmpBytes = size.dx * size.dy * 4;
     ScopedMem<u8> bmpData((u8*)malloc(bmpBytes));
-    CrashIf(!bmpData);
+    ReportIf(!bmpData);
 
     if (!GetDIBits(hdc, hbmp, 0, size.dy, bmpData, &bmi, DIB_RGB_COLORS)) {
         DeleteDC(hdc);
@@ -2111,7 +2124,7 @@ void UpdateBitmapColors(HBITMAP hbmp, COLORREF textColor, COLORREF bgColor) {
 
     DIBSECTION info{};
     int ret = GetObject(hbmp, sizeof(info), &info);
-    CrashIf(ret < sizeof(info.dsBm));
+    ReportIf(ret < sizeof(info.dsBm));
     Size size(info.dsBm.bmWidth, info.dsBm.bmHeight);
 
     // for mapped 32-bit DI bitmaps: directly access the pixel data
@@ -2142,7 +2155,7 @@ void UpdateBitmapColors(HBITMAP hbmp, COLORREF textColor, COLORREF bgColor) {
 
     // for paletted DI bitmaps: only update the color palette
     if (sizeof(info) == ret && info.dsBmih.biBitCount && info.dsBmih.biBitCount <= 8) {
-        CrashIf(info.dsBmih.biBitCount != 8);
+        ReportIf(info.dsBmih.biBitCount != 8);
         RGBQUAD palette[256];
         HDC hDC = CreateCompatibleDC(nullptr);
         DeleteObject(SelectObject(hDC, hbmp));
@@ -2170,7 +2183,7 @@ void UpdateBitmapColors(HBITMAP hbmp, COLORREF textColor, COLORREF bgColor) {
     HDC hDC = CreateCompatibleDC(nullptr);
     int bmpBytes = size.dx * size.dy * 4;
     ScopedMem<u8> bmpData((u8*)malloc(bmpBytes));
-    CrashIf(!bmpData);
+    ReportIf(!bmpData);
 
     if (GetDIBits(hDC, hbmp, 0, size.dy, bmpData, &bmi, DIB_RGB_COLORS)) {
         for (int i = 0; i < bmpBytes; i++) {
@@ -2395,26 +2408,26 @@ void VariantInitBstr(VARIANT& urlVar, const WCHAR* s) {
     urlVar.bstrVal = SysAllocString(s);
 }
 
-ByteSlice LoadDataResource(int resId) {
+StrSpan LoadDataResource(int resId) {
     HRSRC resSrc = FindResourceW(nullptr, MAKEINTRESOURCE(resId), RT_RCDATA);
-    CrashIf(!resSrc);
+    ReportIf(!resSrc);
     if (!resSrc) {
         return {};
     }
     HGLOBAL res = LoadResource(nullptr, resSrc);
-    CrashIf(!res);
+    ReportIf(!res);
     if (!res) {
         return {};
     }
     DWORD size = SizeofResource(nullptr, resSrc);
     const char* resData = (const char*)LockResource(res);
-    CrashIf(!resData);
+    ReportIf(!resData);
     if (!resData) {
         return {};
     }
     char* s = str::Dup(resData, size);
     UnlockResource(res);
-    return {(u8*)s, size};
+    return {s, (int)size};
 }
 
 static HDDEDATA CALLBACK DdeCallback(UINT, UINT, HCONV, HSZ, HSZ, HDDEDATA, ULONG_PTR, ULONG_PTR) {
@@ -2430,7 +2443,7 @@ bool DDEExecute(const WCHAR* server, const WCHAR* topic, const WCHAR* command) {
     DWORD cbLen = 0;
     HDDEDATA answer;
 
-    CrashIf(str::Len(command) >= INT_MAX - 1);
+    ReportIf(str::Len(command) >= INT_MAX - 1);
     if (str::Len(command) >= INT_MAX - 1) {
         return false;
     }
@@ -2543,13 +2556,13 @@ static void LogCursor(LPWSTR) {
 
 HCURSOR GetCachedCursor(LPWSTR cursorId) {
     int i = GetCursorIndex(cursorId);
-    CrashIf(i < 0);
+    ReportIf(i < 0);
     if (i < 0) {
         return nullptr;
     }
     if (nullptr == cachedCursors[i]) {
         cachedCursors[i] = LoadCursor(nullptr, cursorId);
-        CrashIf(cachedCursors[i] == nullptr);
+        ReportIf(cachedCursors[i] == nullptr);
     }
     return cachedCursors[i];
 }
@@ -2605,7 +2618,7 @@ bool TrackMouseLeave(HWND hwnd) {
     return true;
 }
 
-// cf. http://blogs.msdn.com/b/oldnewthing/archive/2004/10/25/247180.aspx
+// http://blogs.msdn.com/b/oldnewthing/archive/2004/10/25/247180.aspx
 EXTERN_C IMAGE_DOS_HEADER __ImageBase;
 
 // A convenient way to grab the same value as HINSTANCE passed to WinMain
@@ -2735,11 +2748,11 @@ void HwndResizeClientSize(HWND hwnd, int dx, int dy) {
     DWORD exStyle = GetWindowExStyle(hwnd);
     RECT r = {x, y, x + dx, y + dy};
     BOOL ok = AdjustWindowRectEx(&r, style, false, exStyle);
-    CrashIf(!ok);
+    ReportIf(!ok);
     int dx2 = RectDx(r);
     int dy2 = RectDy(r);
     ok = SetWindowPos(hwnd, nullptr, 0, 0, dx2, dy2, SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOREPOSITION);
-    CrashIf(!ok);
+    ReportIf(!ok);
 }
 
 // position hwnd on the right of hwndRelative
@@ -2784,7 +2797,7 @@ void HwndDestroyWindowSafe(HWND* hwndPtr) {
 
 void TbSetButtonInfo(HWND hwnd, int buttonId, TBBUTTONINFO* info) {
     auto res = SendMessageW(hwnd, TB_SETBUTTONINFO, buttonId, (LPARAM)info);
-    CrashIf(0 == res);
+    ReportIf(0 == res);
 }
 
 void TbGetPadding(HWND hwnd, int* padX, int* padY) {
@@ -2796,13 +2809,13 @@ void TbGetPadding(HWND hwnd, int* padX, int* padY) {
 void TbSetPadding(HWND hwnd, int padX, int padY) {
     LPARAM lp = MAKELPARAM(padX, padY);
     auto res = SendMessageW(hwnd, TB_SETPADDING, 0, lp);
-    CrashIf(0 == res);
+    ReportIf(0 == res);
 }
 
 // https://docs.microsoft.com/en-us/windows/win32/controls/tb-getrect
 void TbGetRect(HWND hwnd, int buttonId, RECT* rc) {
     auto res = SendMessageW(hwnd, TB_GETRECT, buttonId, (LPARAM)rc);
-    CrashIf(res == 0);
+    ReportIf(res == 0);
 }
 
 void TbGetMetrics(HWND hwnd, TBMETRICS* metrics) {
@@ -3011,4 +3024,82 @@ int MsgBox(HWND hwnd, const char* text, const char* caption, UINT flags) {
     TempWStr textW = ToWStrTemp(text);
     TempWStr captionW = ToWStrTemp(caption);
     return MessageBoxW(hwnd, textW, captionW, flags);
+}
+
+// https://learn.microsoft.com/en-us/cpp/intrinsics/cpuid-cpuidex?view=msvc-170
+u32 CpuID() {
+#if IS_ARM_64
+    return 0;
+#else
+    std::bitset<32> f_1_ECX_;
+    std::bitset<32> f_1_EDX_;
+    std::bitset<32> f_7_EBX_;
+    std::bitset<32> f_7_ECX_;
+
+    u32 res = 0;
+    int cpuInfo[4]{};
+    __cpuid(cpuInfo, 0);
+    int nIds = cpuInfo[0];
+    if (nIds >= 1) {
+        __cpuid(cpuInfo, 1);
+        f_1_ECX_ = cpuInfo[2];
+        f_1_EDX_ = cpuInfo[3];
+    }
+    if (nIds >= 7) {
+        __cpuid(cpuInfo, 7);
+        f_7_EBX_ = cpuInfo[1];
+        f_7_ECX_ = cpuInfo[2];
+    }
+
+    if (f_1_EDX_[23]) {
+        res = res | kCpuMMX;
+    }
+    if (f_1_EDX_[25]) {
+        res = res | kCpuSSE;
+    }
+    if (f_1_EDX_[26]) {
+        res = res | kCpuSSE2;
+    }
+    if (f_1_ECX_[0]) {
+        res = res | kCpuSSE3;
+    }
+    if (f_1_ECX_[9]) {
+        res = res | kCpuSSE3;
+    }
+    if (f_1_ECX_[19]) {
+        res = res | kCpuSSE41;
+    }
+    if (f_1_ECX_[20]) {
+        res = res | kCpuSSE42;
+    }
+    if (f_1_ECX_[28]) {
+        res = res | kCpuAVX;
+    }
+    if (f_7_EBX_[5]) {
+        res = res | kCpuAVX2;
+    }
+    return res;
+#endif
+}
+
+LARGE_INTEGER TimeNow() {
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    return now;
+}
+
+double TimeDiffSecs(const LARGE_INTEGER& start, const LARGE_INTEGER& end) {
+    LARGE_INTEGER freq;
+    QueryPerformanceFrequency(&freq);
+    auto diff = end.QuadPart - start.QuadPart;
+    double res = (double)(diff) / (double)(freq.QuadPart);
+    return res;
+}
+
+double TimeDiffMs(const LARGE_INTEGER& start, const LARGE_INTEGER& end) {
+    LARGE_INTEGER freq;
+    QueryPerformanceFrequency(&freq);
+    auto diff = end.QuadPart - start.QuadPart;
+    double res = (double)(diff) / (double)(freq.QuadPart);
+    return res * 1000;
 }

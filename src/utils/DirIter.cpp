@@ -39,7 +39,7 @@ static bool IsSpecialDir(const char* s) {
 
 // if cb returns false, we stop further traversal
 bool VisitDir(const char* dir, u32 flg, const VisitDirCb& cb) {
-    CrashIf(flg == 0);
+    ReportIf(flg == 0);
     bool includeFiles = flg & kVisitDirIncudeFiles;
     bool includeDirs = flg & kVisitDirIncludeDirs;
     bool recur = flg & kVisitDirRecurse;
@@ -89,7 +89,7 @@ bool DirTraverse(const char* dir, bool recurse, const VisitDirCb& cb) {
     return ok;
 }
 
-bool CollectPathsFromDirectory(const char* pattern, StrVec& paths, bool dirsInsteadOfFiles) {
+bool CollectPathsFromDirectory(const char* pattern, StrVec& paths) {
     TempStr dir = path::GetDirTemp(pattern);
 
     WIN32_FIND_DATAW fdata{};
@@ -105,12 +105,7 @@ bool CollectPathsFromDirectory(const char* pattern, StrVec& paths, bool dirsInst
         char* name = ToUtf8Temp(fdata.cFileName);
         DWORD attrs = fdata.dwFileAttributes;
         if (IsRegularFile(attrs)) {
-            append = !dirsInsteadOfFiles;
-        } else if (IsDirectory(attrs)) {
-            append = dirsInsteadOfFiles && !IsSpecialDir(name);
-        }
-        if (append) {
-            char* path = path::JoinTemp(dir, name);
+            TempStr path = path::JoinTemp(dir, name);
             paths.Append(path);
         }
     } while (FindNextFileW(hfind, &fdata));
@@ -144,7 +139,7 @@ struct DirTraverseThreadData {
 
 static DWORD WINAPI DirTraverseThread(LPVOID data) {
     DirTraverseThreadData* td = (DirTraverseThreadData*)data;
-    CrashIf(!td);
+    ReportIf(!td);
 
     DirTraverse(td->dir, td->recurse, [td](WIN32_FIND_DATAW*, const char* path) -> bool {
         td->queue->Append(path);

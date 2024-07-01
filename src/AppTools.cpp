@@ -1,4 +1,4 @@
-/* Copyright 2022 the SumatraPDF project authors (see AUTHORS file).
+/* Copyright 2024 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
 #include "utils/BaseUtil.h"
@@ -33,14 +33,45 @@ bool HasBeenInstalled() {
     }
 
     TempStr exePath = GetExePathTemp();
-    if (exePath) {
-        return false;
-    }
-
     if (!str::EndsWithI(installedPath, ".exe")) {
         installedPath = path::JoinTemp(installedPath, path::GetBaseNameTemp(exePath));
     }
     return path::IsSame(installedPath, exePath);
+}
+
+static char* PathStripBaseName(char* path) {
+    // base will either return path or a pointer inside path right after last "/"
+    char* base = (char*)path::GetBaseNameTemp(path);
+    if (base > path) {
+        base[-1] = 0;
+        return path;
+    }
+    return nullptr;
+}
+
+// return true if path is in a given dir, even if dir is a junction etc.
+static bool IsPathInDirSmart(const char* path, const char* dir) {
+    char* dir2 = str::DupTemp(path);
+    while (dir2) {
+        if (path::IsSame(dir, dir2)) {
+            return true;
+        }
+        dir2 = PathStripBaseName(dir2);
+    }
+    return false;
+}
+
+static bool IsExeInProgramFiles() {
+    TempStr exePath = GetExePathTemp();
+    TempStr dir = GetSpecialFolderTemp(CSIDL_PROGRAM_FILES);
+    if (IsPathInDirSmart(exePath, dir)) {
+        return true;
+    }
+    dir = GetSpecialFolderTemp(CSIDL_PROGRAM_FILESX86);
+    if (IsPathInDirSmart(exePath, dir)) {
+        return true;
+    }
+    return false;
 }
 
 /* Return false if this program has been started from "Program Files" directory
@@ -52,39 +83,20 @@ bool IsRunningInPortableMode() {
     if (sCacheIsPortable != -1) {
         return sCacheIsPortable != 0;
     }
-    sCacheIsPortable = 1;
 
+    sCacheIsPortable = 0;
     if (gIsStoreBuild) {
-        sCacheIsPortable = 0;
         return false;
     }
 
     if (HasBeenInstalled()) {
-        sCacheIsPortable = 0;
         return false;
     }
 
-    TempStr exePath = GetExePathTemp();
-    TempStr programFilesDir = GetSpecialFolderTemp(CSIDL_PROGRAM_FILES);
-    // if we can't get a path, assume we're not running from "Program Files"
-    if (!exePath || !programFilesDir) {
+    if (!IsExeInProgramFiles()) {
         sCacheIsPortable = 1;
-        return true;
     }
-
-    // check if one of the exePath's parent directories is "Program Files"
-    // (or a junction to it)
-    char* baseName;
-    while ((baseName = (char*)path::GetBaseNameTemp(exePath)) > exePath) {
-        baseName[-1] = '\0';
-        if (path::IsSame(programFilesDir, exePath)) {
-            sCacheIsPortable = 0;
-            return false;
-        }
-    }
-
-    sCacheIsPortable = 1;
-    return true;
+    return sCacheIsPortable != 0;
 }
 
 bool IsDllBuild() {
@@ -92,48 +104,53 @@ bool IsDllBuild() {
     return resSrc != nullptr;
 }
 
-static AutoFreeStr gAppDataDir;
+// TODO: leaks
+static char* gAppDataDir = nullptr;
 
-void SetAppDataPath(const char* path) {
-    path = path::NormalizeTemp(path);
-    gAppDataDir.SetCopy(path);
+void SetAppDataDir(const char* dir) {
+    dir = path::NormalizeTemp(dir);
+    bool ok = dir::CreateAll(dir);
+    ReportIf(!ok);
+    str::ReplaceWithCopy(&gAppDataDir, dir);
+}
+
+TempStr GetAppDataDirTemp() {
+    if (gAppDataDir) {
+        return gAppDataDir;
+    }
+
+    TempStr dir;
+    if (IsRunningInPortableMode()) {
+        dir = GetExeDirTemp();
+    } else {
+        dir = GetSpecialFolderTemp(CSIDL_LOCAL_APPDATA, true);
+        if (!dir) {
+            ReportIf(!dir);
+            dir = GetTempDirTemp(); // shouldn't happen, last chance thing
+        }
+        dir = path::JoinTemp(dir, kAppName);
+        // use a different path for store builds
+        if (gIsStoreBuild) {
+            // %APPLOCALDATA%/SumatraPDF Store
+            // %APPLOCALDATA%/SumatraPDF Store Preview
+            dir = str::JoinTemp(dir, " Store");
+            if (gIsPreReleaseBuild) {
+                dir = str::JoinTemp(dir, " Preview");
+            }
+        }
+    }
+    logf("GetAppDataDirTemp(): '%s'\n", dir);
+    SetAppDataDir(dir);
+    return gAppDataDir;
 }
 
 // Generate full path for a file or directory for storing data
-TempStr AppGenDataFilenameTemp(const char* name) {
+TempStr GetPathInAppDataDirTemp(const char* name) {
     if (!name) {
         return nullptr;
     }
-
-    if (gAppDataDir && dir::Exists(gAppDataDir)) {
-        return path::JoinTemp(gAppDataDir, name);
-    }
-
-    if (IsRunningInPortableMode()) {
-        /* Use the same path as the binary */
-        return path::GetPathOfFileInAppDirTemp(name);
-    }
-
-    TempStr path = GetSpecialFolderTemp(CSIDL_LOCAL_APPDATA, true);
-    if (!path) {
-        return nullptr;
-    }
-    path = path::JoinTemp(path, kAppName);
-
-    // use a different path for store builds
-    if (gIsStoreBuild) {
-        // %APPLOCALDATA%/SumatraPDF Store
-        // %APPLOCALDATA%/SumatraPDF Store Preview
-        path = str::JoinTemp(path, " Store");
-        if (gIsPreReleaseBuild) {
-            path = str::JoinTemp(path, " Preview");
-        }
-    }
-    bool ok = dir::Create(path);
-    if (!ok) {
-        return nullptr;
-    }
-    return path::JoinTemp(path, name);
+    TempStr dir = GetAppDataDirTemp();
+    return path::JoinTemp(dir, name);
 }
 
 // List of rules used to detect TeX editors.
@@ -502,7 +519,7 @@ void SaveCallstackLogs() {
     if (s.empty()) {
         return;
     }
-    TempStr filePath = AppGenDataFilenameTemp("callstacks.txt");
+    TempStr filePath = GetPathInAppDataDirTemp("callstacks.txt");
     file::WriteFile(filePath, s);
     s.Free();
 }
