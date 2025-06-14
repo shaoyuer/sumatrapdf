@@ -287,8 +287,7 @@ workspace "SumatraPDF"
     optimized_conf()
     defines { "UNRAR", "RARDLL", "SILENT" }
     -- os.hpp redefines WINVER, is there a better way?
-    disablewarnings { "4005" }
-    disablewarnings { "4100", "4201", "4211", "4244", "4389", "4456", "4459", "4701", "4702", "4706", "4709", "4731", "4996" }
+    disablewarnings { "4005", "4100", "4201", "4211", "4244", "4310", "4389", "4456", "4459", "4505", "4701", "4702", "4706", "4709", "4731", "4996" } 
     -- unrar uses exception handling in savepos.hpp but I don't want to enable it
     -- as it seems to infect the Sumatra binary as well (i.e. I see bad alloc exception
     -- being thrown)
@@ -468,7 +467,7 @@ workspace "SumatraPDF"
       "FT_CONFIG_MODULES_H=\"slimftmodules.h\"",
       "FT_CONFIG_OPTIONS_H=\"slimftoptions.h\"",
     }
-    disablewarnings { "4018", "4100", "4244", "4267", "4312", "4701", "4706", "4996" }
+    disablewarnings { "4018", "4100", "4101", "4244", "4267", "4312", "4701", "4706", "4996" }
     includedirs { "mupdf/scripts/freetype", "ext/freetype/include" }
     freetype_files()
 
@@ -582,14 +581,15 @@ workspace "SumatraPDF"
     -- this defines which fonts are to be excluded from being included directly
     -- we exclude the very big cjk fonts
     defines { "TOFU_NOTO", "TOFU_CJK_LANG", "TOFU_NOTO_SUMATRA" }
+    defines { "FZ_ENABLE_SVG=1", "FZ_ENABLE_BROTLI=0", "FZ_ENABLE_BARCODE=0" }
 
     filter { "platforms:arm64" }
         defines { "ARCH_HAS_NEON=1" }
     filter {}
 
     disablewarnings {
-      "4005", "4018", "4057", "4100", "4115", "4130", "4132", "4204", "4206", "4210", "4245", "4267",
-      "4295", "4305", "4389", "4456", "4457", "4703", "4706", "4819", "5286"
+      "4005", "4018", "4057", "4100", "4115", "4130", "4132", "4200", "4204", "4206", "4210", 
+      "4245", "4267", "4295", "4305", "4389", "4456", "4457", "4703", "4706", "4819", "5286"
     }
     -- force including mupdf/scripts/openjpeg/opj_config_private.h
     -- with our build over-rides
@@ -625,7 +625,7 @@ workspace "SumatraPDF"
     language "C"
     optimized_conf()
     disablewarnings { "4206", "4702" }
-    defines { "FZ_ENABLE_SVG" }
+    defines { "FZ_ENABLE_SVG=1", "FZ_ENABLE_BROTLI=0", "FZ_ENABLE_BARCODE=0" }
 
     filter { "platforms:arm64" }
         defines { "ARCH_HAS_NEON=1" }
